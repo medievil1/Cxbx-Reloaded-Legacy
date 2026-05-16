@@ -198,7 +198,7 @@ static bool CxbxAvQueryCurrentDisplayState(CxbxAvDisplayState* state)
 	current.Height = (xbox::ulong_xt)NV2ADevice::GetFrameHeight(d);
 	current.Format = CxbxAvInferDisplayFormat(d);
 
-	DWORD inferredBpp = EmuXBFormatBytesPerPixel(current.Format);
+	DWORD inferredBpp = EmuXBFormatBytesPerPixel(static_cast<xbox::X_D3DFORMAT>(current.Format));
 	DWORD trackedBpp = EmuXBFormatBytesPerPixel(g_CxbxAvCurrentDisplayFormat);
 	if (trackedBpp != 0 && trackedBpp == inferredBpp) {
 		current.Format = g_CxbxAvCurrentDisplayFormat;

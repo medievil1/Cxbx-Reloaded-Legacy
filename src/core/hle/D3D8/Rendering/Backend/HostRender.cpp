@@ -58,7 +58,7 @@ static bool DrawPersistedDisplay()
 		return false;
 	}
 
-	DXGI_FORMAT format = GetSavedDisplayDXGIFormat(savedDisplay.Format);
+	DXGI_FORMAT format = GetSavedDisplayDXGIFormat(static_cast<xbox::X_D3DFORMAT>(savedDisplay.Format));
 	if (format == DXGI_FORMAT_UNKNOWN || savedDisplay.Pitch == 0 || savedDisplay.Width == 0 || savedDisplay.Height == 0) {
 		return false;
 	}

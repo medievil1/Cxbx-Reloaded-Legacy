@@ -56,7 +56,7 @@ struct CxbxAvDisplayState {
 	xbox::ulong_xt     Pitch = 0;
 	xbox::ulong_xt     Width = 0;
 	xbox::ulong_xt     Height = 0;
-	xbox::X_D3DFORMAT  Format = xbox::X_D3DFMT_LIN_X8R8G8B8;
+	xbox::ulong_xt     Format = 0;
 	xbox::ulong_xt     SurfaceSize = 0;
 	xbox::boolean_xt   Valid = xbox::FALSE;
 };
