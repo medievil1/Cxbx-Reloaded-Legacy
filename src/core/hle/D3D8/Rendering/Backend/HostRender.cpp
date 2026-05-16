@@ -98,10 +98,10 @@ static void DrawInitialBlackScreen()
 		return;
 	}
 
-    	// initially, show a black screen
-    	// Only clear depth buffer and stencil if present
-    	//
-    	// Avoids following DirectX Debug Runtime error report
+	// initially, show a black screen
+	// Only clear depth buffer and stencil if present
+	//
+	// Avoids following DirectX Debug Runtime error report
    	//    [424] Direct3D8: (ERROR) :Invalid flag D3DCLEAR_ZBUFFER: no zbuffer is associated with device. Clear failed. 
    	//
 
