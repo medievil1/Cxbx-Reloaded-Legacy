@@ -39,6 +39,8 @@ namespace NtDll
 };
 
 #include "core\kernel\support\Emu.h" // For EmuLog(LOG_LEVEL::WARNING, )
+#include "core\kernel\memory-manager\VMManager.h"
+#include "core\hle\D3D8\Rendering\Backend\Backend_D3D11_PageTracker.h"
 #include "core\hle\D3D8\Rendering\RenderGlobals.h"
 #include "devices\x86\EmuX86.h"
 
@@ -153,6 +155,120 @@ ULONG AvQueryAvCapabilities()
 }
 
 xbox::PVOID xbox::AvSavedDataAddress = xbox::zeroptr;
+static CxbxAvDisplayState g_CxbxAvSavedDisplayState = {};
+static xbox::X_D3DFORMAT g_CxbxAvCurrentDisplayFormat = xbox::X_D3DFMT_LIN_X8R8G8B8;
+
+static xbox::ulong_xt CxbxAvGetCurrentDisplayPitchBytes(NV2AState* d)
+{
+	return ((((xbox::ulong_xt)d->prmcio.cr[NV_CIO_CR_OFFSET_INDEX])
+		| (0x700 & ((xbox::ulong_xt)d->prmcio.cr[NV_CIO_CRE_RPC0_INDEX] << 3))
+		| (0x800 & ((xbox::ulong_xt)d->prmcio.cr[NV_CIO_CRE_LSR_INDEX] << 6))) * 8);
+}
+
+static xbox::X_D3DFORMAT CxbxAvInferDisplayFormat(NV2AState* d)
+{
+	switch (d->prmcio.cr[NV_CIO_CRE_PIXEL_INDEX] & 0x03) {
+	case 1:
+		return xbox::X_D3DFMT_LIN_L8;
+	case 2:
+		if (d->pramdac.regs[RI(NV_PRAMDAC_GENERAL_CONTROL)] & NV_PRAMDAC_GENERAL_CONTROL_ALT_MODE_SEL) {
+			return xbox::X_D3DFMT_LIN_R5G6B5;
+		}
+		return xbox::X_D3DFMT_LIN_X1R5G5B5;
+	default:
+		return xbox::X_D3DFMT_LIN_X8R8G8B8;
+	}
+}
+
+static bool CxbxAvQueryCurrentDisplayState(CxbxAvDisplayState* state)
+{
+	if (!state || !g_NV2A) {
+		return false;
+	}
+
+	NV2AState* d = g_NV2A->GetDeviceState();
+	if (!d) {
+		return false;
+	}
+
+	CxbxAvDisplayState current = {};
+	current.FrameBuffer = (xbox::addr_xt)d->pcrtc.start;
+	current.Pitch = CxbxAvGetCurrentDisplayPitchBytes(d);
+	current.Width = (xbox::ulong_xt)NV2ADevice::GetFrameWidth(d);
+	current.Height = (xbox::ulong_xt)NV2ADevice::GetFrameHeight(d);
+	current.Format = CxbxAvInferDisplayFormat(d);
+
+	DWORD inferredBpp = EmuXBFormatBytesPerPixel(current.Format);
+	DWORD trackedBpp = EmuXBFormatBytesPerPixel(g_CxbxAvCurrentDisplayFormat);
+	if (trackedBpp != 0 && trackedBpp == inferredBpp) {
+		current.Format = g_CxbxAvCurrentDisplayFormat;
+	}
+
+	if (current.FrameBuffer == 0 || current.Pitch == 0 || current.Width == 0 || current.Height == 0) {
+		return false;
+	}
+
+	current.SurfaceSize = current.Pitch * current.Height;
+	current.Valid = xbox::TRUE;
+	*state = current;
+	return true;
+}
+
+bool CxbxAvGetSavedDisplayState(CxbxAvDisplayState* state)
+{
+	if (state == nullptr || g_CxbxAvSavedDisplayState.Valid == xbox::FALSE ||
+		g_CxbxAvSavedDisplayState.FrameBuffer == 0 || g_CxbxAvSavedDisplayState.SurfaceSize == 0) {
+		return false;
+	}
+
+	*state = g_CxbxAvSavedDisplayState;
+	return true;
+}
+
+void CxbxAvRestoreSavedDisplayState(const CxbxAvDisplayState* state)
+{
+	if (state == nullptr || state->Valid == xbox::FALSE || state->FrameBuffer == 0 || state->SurfaceSize == 0) {
+		CxbxAvClearSavedDisplayState(false);
+		return;
+	}
+
+	g_CxbxAvSavedDisplayState = *state;
+	xbox::AvSavedDataAddress = reinterpret_cast<xbox::PVOID>(state->FrameBuffer);
+}
+
+void CxbxAvClearSavedDisplayState(bool clearPersistedMemory)
+{
+	if (clearPersistedMemory &&
+		g_CxbxAvSavedDisplayState.Valid != xbox::FALSE &&
+		g_CxbxAvSavedDisplayState.FrameBuffer != 0 &&
+		g_CxbxAvSavedDisplayState.SurfaceSize != 0) {
+		g_VMManager.PersistMemory(g_CxbxAvSavedDisplayState.FrameBuffer, g_CxbxAvSavedDisplayState.SurfaceSize, false);
+	}
+
+	g_CxbxAvSavedDisplayState = {};
+	xbox::AvSavedDataAddress = xbox::zeroptr;
+}
+
+bool CxbxAvPersistCurrentDisplayState()
+{
+	CxbxAvDisplayState current = {};
+	if (!CxbxAvQueryCurrentDisplayState(&current)) {
+		return false;
+	}
+
+	CxbxAvClearSavedDisplayState(true);
+
+	if (g_pD3DDeviceContext != nullptr) {
+		CxbxPageTrackerLockD3D11Context();
+		CxbxPageTrackerFlushGPUDirtyToMirror(current.FrameBuffer, current.SurfaceSize);
+		CxbxPageTrackerUnlockD3D11Context();
+	}
+
+	g_VMManager.PersistMemory(current.FrameBuffer, current.SurfaceSize, true);
+	g_CxbxAvSavedDisplayState = current;
+	xbox::AvSavedDataAddress = reinterpret_cast<xbox::PVOID>(current.FrameBuffer);
+	return true;
+}
 
 // ******************************************************************
 // * 0x0001 - AvGetSavedDataAddress()
@@ -300,6 +416,7 @@ XBSYSAPI EXPORTNUM(3) xbox::ulong_xt NTAPI xbox::AvSetDisplayMode
 	}
 
 	Pitch /= 8;
+	g_CxbxAvCurrentDisplayFormat = static_cast<xbox::X_D3DFORMAT>(Format);
 
 	static xbox::ulong_xt AvpCurrentMode = 0;
 	if (AvpCurrentMode == Mode) {
@@ -312,6 +429,7 @@ XBSYSAPI EXPORTNUM(3) xbox::ulong_xt NTAPI xbox::AvSetDisplayMode
 
 		AvSendTVEncoderOption(RegisterBase, AV_OPTION_FLICKER_FILTER, 5, NULL);
 		AvSendTVEncoderOption(RegisterBase, AV_OPTION_ENABLE_LUMA_FILTER, FALSE, NULL);
+		CxbxAvClearSavedDisplayState();
 
 		RETURN(X_STATUS_SUCCESS);
 	}
@@ -390,6 +508,7 @@ XBSYSAPI EXPORTNUM(3) xbox::ulong_xt NTAPI xbox::AvSetDisplayMode
 
 	REG_WR32(RegisterBase, NV_PCRTC_START, FrameBuffer);
 	AvpCurrentMode = Mode;
+	CxbxAvClearSavedDisplayState();
 
 	RETURN(X_STATUS_SUCCESS);
 }

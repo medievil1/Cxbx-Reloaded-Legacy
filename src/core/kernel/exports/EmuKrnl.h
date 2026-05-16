@@ -51,6 +51,21 @@ xbox::boolean_xt RemoveEntryList(xbox::PLIST_ENTRY pEntry);
 xbox::PLIST_ENTRY RemoveHeadList(xbox::PLIST_ENTRY pListHead);
 xbox::PLIST_ENTRY RemoveTailList(xbox::PLIST_ENTRY pListHead);
 
+struct CxbxAvDisplayState {
+	xbox::addr_xt      FrameBuffer = 0;
+	xbox::ulong_xt     Pitch = 0;
+	xbox::ulong_xt     Width = 0;
+	xbox::ulong_xt     Height = 0;
+	xbox::X_D3DFORMAT  Format = xbox::X_D3DFMT_LIN_X8R8G8B8;
+	xbox::ulong_xt     SurfaceSize = 0;
+	xbox::boolean_xt   Valid = xbox::FALSE;
+};
+
+bool CxbxAvGetSavedDisplayState(CxbxAvDisplayState* state);
+void CxbxAvRestoreSavedDisplayState(const CxbxAvDisplayState* state);
+void CxbxAvClearSavedDisplayState(bool clearPersistedMemory = true);
+bool CxbxAvPersistCurrentDisplayState();
+
 extern xbox::LAUNCH_DATA_PAGE DefaultLaunchDataPage;
 extern xbox::PKINTERRUPT EmuInterruptList[MAX_BUS_INTERRUPT_LEVEL + 1];
 // Indicates to disable/enable all interrupts when cli and sti instructions are executed
