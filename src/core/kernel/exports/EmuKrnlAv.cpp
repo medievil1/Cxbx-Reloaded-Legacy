@@ -416,7 +416,9 @@ XBSYSAPI EXPORTNUM(3) xbox::ulong_xt NTAPI xbox::AvSetDisplayMode
 	}
 
 	Pitch /= 8;
-	g_CxbxAvCurrentDisplayFormat = static_cast<xbox::X_D3DFORMAT>(Format);
+	if (Format <= xbox::X_D3DFMT_LAST) {
+		g_CxbxAvCurrentDisplayFormat = static_cast<xbox::X_D3DFORMAT>(Format);
+	}
 
 	static xbox::ulong_xt AvpCurrentMode = 0;
 	if (AvpCurrentMode == Mode) {

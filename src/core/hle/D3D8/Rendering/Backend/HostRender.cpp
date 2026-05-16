@@ -62,6 +62,10 @@ static bool DrawPersistedDisplay()
 	if (format == DXGI_FORMAT_UNKNOWN || savedDisplay.Pitch == 0 || savedDisplay.Width == 0 || savedDisplay.Height == 0) {
 		return false;
 	}
+	if (!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer) ||
+		!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer + savedDisplay.SurfaceSize - 1)) {
+		return false;
+	}
 
 	D3D11_TEXTURE2D_DESC desc = {};
 	desc.Width = savedDisplay.Width;
