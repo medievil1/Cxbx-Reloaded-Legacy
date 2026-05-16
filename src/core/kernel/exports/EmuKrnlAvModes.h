@@ -209,6 +209,17 @@ typedef struct
     xbox::ulong_xt  DisplayMode;
 } XB_DisplayMode;
 
+typedef struct
+{
+    xbox::addr_xt     FrameBuffer;
+    xbox::ulong_xt    Pitch;
+    xbox::ulong_xt    Width;
+    xbox::ulong_xt    Height;
+    xbox::X_D3DFORMAT Format;
+    xbox::ulong_xt    SurfaceSize;
+    xbox::ulong_xt    Valid;
+} CxbxAvDisplayState;
+
 const XB_DisplayMode g_DisplayModes[] =
 {
     { AV_PACK_VGA             | AV_STANDARD_NTSC_M | AV_FLAGS_60Hz | 0                   | 0                   | 0                 | 0,                       640,  480,  AV_MODE_640x480_TO_VGA                    },
@@ -418,3 +429,9 @@ const XB_DisplayMode g_DisplayModes[] =
 };
 
 const uint32_t g_DisplayModeCount = sizeof(g_DisplayModes) / sizeof(XB_DisplayMode);
+
+// Display state persistence functions
+bool CxbxAvGetSavedDisplayState(CxbxAvDisplayState* state);
+void CxbxAvRestoreSavedDisplayState(const CxbxAvDisplayState* state);
+void CxbxAvClearSavedDisplayState(bool clearPersistedMemory);
+bool CxbxAvPersistCurrentDisplayState();

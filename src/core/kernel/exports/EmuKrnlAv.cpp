@@ -42,6 +42,8 @@ namespace NtDll
 #include "core\kernel\memory-manager\VMManager.h"
 #include "core\hle\D3D8\Rendering\Backend\Backend_D3D11_PageTracker.h"
 #include "core\hle\D3D8\Rendering\RenderGlobals.h"
+#include "core\hle\D3D8\Rendering\Backend\Backend_D3D11.h" // For g_pD3DDeviceContext
+#include "core\hle\D3D8\XbConvert.h" // For EmuXBFormatBytesPerPixel
 #include "devices\x86\EmuX86.h"
 
 #include "EmuKrnlAvModes.h"
@@ -431,7 +433,7 @@ XBSYSAPI EXPORTNUM(3) xbox::ulong_xt NTAPI xbox::AvSetDisplayMode
 
 		AvSendTVEncoderOption(RegisterBase, AV_OPTION_FLICKER_FILTER, 5, NULL);
 		AvSendTVEncoderOption(RegisterBase, AV_OPTION_ENABLE_LUMA_FILTER, FALSE, NULL);
-		CxbxAvClearSavedDisplayState();
+		CxbxAvClearSavedDisplayState(true);
 
 		RETURN(X_STATUS_SUCCESS);
 	}
@@ -510,7 +512,7 @@ XBSYSAPI EXPORTNUM(3) xbox::ulong_xt NTAPI xbox::AvSetDisplayMode
 
 	REG_WR32(RegisterBase, NV_PCRTC_START, FrameBuffer);
 	AvpCurrentMode = Mode;
-	CxbxAvClearSavedDisplayState();
+	CxbxAvClearSavedDisplayState(true);
 
 	RETURN(X_STATUS_SUCCESS);
 }
