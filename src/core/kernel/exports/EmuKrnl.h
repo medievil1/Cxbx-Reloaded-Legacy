@@ -58,7 +58,7 @@ struct CxbxAvDisplayState {
 	xbox::ulong_xt     Height = 0;
 	xbox::ulong_xt     Format = 0;
 	xbox::ulong_xt     SurfaceSize = 0;
-	xbox::boolean_xt   Valid = xbox::FALSE;
+	xbox::boolean_xt   Valid = 0;
 };
 
 bool CxbxAvGetSavedDisplayState(CxbxAvDisplayState* state);

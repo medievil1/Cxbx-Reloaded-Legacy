@@ -209,14 +209,14 @@ static bool CxbxAvQueryCurrentDisplayState(CxbxAvDisplayState* state)
 	}
 
 	current.SurfaceSize = current.Pitch * current.Height;
-	current.Valid = xbox::TRUE;
+	current.Valid = 1;
 	*state = current;
 	return true;
 }
 
 bool CxbxAvGetSavedDisplayState(CxbxAvDisplayState* state)
 {
-	if (state == nullptr || g_CxbxAvSavedDisplayState.Valid == xbox::FALSE ||
+	if (state == nullptr || g_CxbxAvSavedDisplayState.Valid == 0 ||
 		g_CxbxAvSavedDisplayState.FrameBuffer == 0 || g_CxbxAvSavedDisplayState.SurfaceSize == 0) {
 		return false;
 	}
@@ -227,7 +227,7 @@ bool CxbxAvGetSavedDisplayState(CxbxAvDisplayState* state)
 
 void CxbxAvRestoreSavedDisplayState(const CxbxAvDisplayState* state)
 {
-	if (state == nullptr || state->Valid == xbox::FALSE || state->FrameBuffer == 0 || state->SurfaceSize == 0) {
+	if (state == nullptr || state->Valid == 0 || state->FrameBuffer == 0 || state->SurfaceSize == 0) {
 		CxbxAvClearSavedDisplayState(false);
 		return;
 	}
@@ -239,7 +239,7 @@ void CxbxAvRestoreSavedDisplayState(const CxbxAvDisplayState* state)
 void CxbxAvClearSavedDisplayState(bool clearPersistedMemory)
 {
 	if (clearPersistedMemory &&
-		g_CxbxAvSavedDisplayState.Valid != xbox::FALSE &&
+		g_CxbxAvSavedDisplayState.Valid != 0 &&
 		g_CxbxAvSavedDisplayState.FrameBuffer != 0 &&
 		g_CxbxAvSavedDisplayState.SurfaceSize != 0) {
 		g_VMManager.PersistMemory(g_CxbxAvSavedDisplayState.FrameBuffer, g_CxbxAvSavedDisplayState.SurfaceSize, false);

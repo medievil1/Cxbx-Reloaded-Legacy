@@ -327,9 +327,9 @@ void VMManager::RestorePersistentMemory()
 		savedDisplay.Pitch = persisted_mem->SavedDisplayPitch;
 		savedDisplay.Width = persisted_mem->SavedDisplayWidth;
 		savedDisplay.Height = persisted_mem->SavedDisplayHeight;
-		savedDisplay.Format = static_cast<xbox::X_D3DFORMAT>(persisted_mem->SavedDisplayFormat);
+		savedDisplay.Format = persisted_mem->SavedDisplayFormat;
 		savedDisplay.SurfaceSize = persisted_mem->SavedDisplaySize;
-		savedDisplay.Valid = xbox::TRUE;
+		savedDisplay.Valid = 1;
 		CxbxAvRestoreSavedDisplayState(&savedDisplay);
 		EmuLog(LOG_LEVEL::INFO, "Restored persisted display\n");
 	}
