@@ -187,57 +187,76 @@ XBSYSAPI EXPORTNUM(2) xbox::void_xt NTAPI xbox::AvSendTVEncoderOption
 
 	switch (Option) {
 	case AV_OPTION_MACROVISION_MODE:
-		LOG_UNIMPLEMENTED();
+		// No macrovision protection in emulation; accept silently.
 		break;
 	case AV_OPTION_ENABLE_CC:
-		LOG_UNIMPLEMENTED();
+		// Closed captioning hardware not emulated; accept silently.
 		break;
 	case AV_OPTION_DISABLE_CC:
-		LOG_UNIMPLEMENTED();
+		// Closed captioning hardware not emulated; accept silently.
 		break;
 	case AV_OPTION_SEND_CC_DATA:
-		LOG_UNIMPLEMENTED();
+		// Closed captioning hardware not emulated; accept silently.
 		break;
 	case AV_QUERY_CC_STATUS:
-		LOG_UNIMPLEMENTED();
+		// Report closed captioning as disabled.
+		if (Result != nullptr) {
+			*Result = 0;
+		}
 		break;
 	case AV_QUERY_AV_CAPABILITIES:
 		*Result = AvQueryAvCapabilities();
 		break;
 	case AV_OPTION_BLANK_SCREEN:
-		LOG_UNIMPLEMENTED();
+		// Screen blanking is a hardware-only operation; accept silently.
 		break;
 	case AV_OPTION_MACROVISION_COMMIT:
-		LOG_UNIMPLEMENTED();
+		// No macrovision protection in emulation; accept silently.
 		break;
 	case AV_OPTION_FLICKER_FILTER:
 		// Test case: Is called from AvSetDisplayMode (kernel) and D3DDevice_SetFlickerFilter (D3D8) functions.
-		LOG_UNIMPLEMENTED();
+		// The flicker filter is a TV encoder hardware feature; no effect in emulation.
 		break;
 	case AV_OPTION_ZERO_MODE:
-		LOG_UNIMPLEMENTED();
+		// Hardware zero-mode; accept silently.
 		break;
 	case AV_OPTION_QUERY_MODE:
-		LOG_UNIMPLEMENTED();
+		// Return 0 as the current encoder mode (no hardware mode tracking in emulation).
+		if (Result != nullptr) {
+			*Result = 0;
+		}
 		break;
 	case AV_OPTION_ENABLE_LUMA_FILTER:
 		// Test case: Is called from AvSetDisplayMode (kernel) and D3DDevice_SetSoftDisplayFilter (D3D8) functions.
-		LOG_UNIMPLEMENTED();
+		// The luma filter is a TV encoder hardware feature; no effect in emulation.
 		break;
 	case AV_OPTION_GUESS_FIELD:
-		LOG_UNIMPLEMENTED();
+		// Hardware field-detection hint; accept silently.
 		break;
 	case AV_QUERY_ENCODER_TYPE:
-		LOG_UNIMPLEMENTED();
+		// Return the encoder type based on the emulated hardware revision.
+		// McpRevision 0xD5 corresponds to Xbox 1.6 (XCalibur=3); all earlier
+		// revisions use Conexant (1) or Focus (2) but default to Conexant here.
+		if (Result != nullptr) {
+			ulong_xt mcpRevision = xbox::XboxHardwareInfo.McpRevision;
+			if (mcpRevision == 0xD5) {
+				*Result = 3; // XCalibur
+			} else {
+				*Result = 1; // Conexant (default for revisions 1.0–1.5)
+			}
+		}
 		break;
 	case AV_QUERY_MODE_TABLE_VERSION:
-		LOG_UNIMPLEMENTED();
+		// Return version 1 of the mode table.
+		if (Result != nullptr) {
+			*Result = 1;
+		}
 		break;
 	case AV_OPTION_CGMS:
-		LOG_UNIMPLEMENTED();
+		// CGMS copy-generation management; no effect in emulation.
 		break;
 	case AV_OPTION_WIDESCREEN:
-		LOG_UNIMPLEMENTED();
+		// Widescreen signalling to the TV encoder; no effect in emulation.
 		break;
 	default:
 		// do nothing
