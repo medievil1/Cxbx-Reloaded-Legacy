@@ -118,7 +118,6 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
   "
   LINK_FLAGS_RELEASE "
   /LTCG \
-  /DEBUG \
   /ignore:4099 \
   "
  )
@@ -127,7 +126,6 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
  # Replace CMake's default /Ob2 with /Ob3 for aggressive inlining
  string(REPLACE "/Ob2" "/Ob3" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} \
-  /Zi \
   /Oi \
   /Ot \
   /GL \
