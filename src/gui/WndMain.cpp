@@ -494,7 +494,7 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 // During a quick reboot (emu process cycling), show the last captured
                 // frame in the main window area instead of the Cxbx splash screen.
                 bool bDrewCapturedFrame = false;
-                if (m_iIsEmulating > 0 && m_hwndChild == NULL && m_hCapturedFrameSection != NULL) {
+                if (m_iIsEmulating > 0 && m_hwndChild == nullptr && m_hCapturedFrameSection != nullptr) {
                     bool captureValid = false;
                     g_EmuShared->GetCapturedFrameValid(&captureValid);
                     if (captureValid) {

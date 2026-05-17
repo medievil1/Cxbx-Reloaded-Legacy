@@ -279,7 +279,7 @@ bool CxbxAvPersistCurrentDisplayState()
 		if (bpp > 0 && current.SurfaceSize > 0 && current.SurfaceSize <= kMaxFrameSize) {
 			std::string sectionName = "Local\\CxbxCapFrame-" + std::to_string(cli_config::GetSessionID());
 			HANDLE hSection = OpenFileMapping(FILE_MAP_WRITE, FALSE, sectionName.c_str());
-			if (hSection != NULL) {
+			if (hSection != nullptr) {
 				void* pData = MapViewOfFile(hSection, FILE_MAP_WRITE, 0, 0, current.SurfaceSize);
 				if (pData != nullptr) {
 					memcpy(pData, reinterpret_cast<const void*>(current.FrameBuffer), current.SurfaceSize);
