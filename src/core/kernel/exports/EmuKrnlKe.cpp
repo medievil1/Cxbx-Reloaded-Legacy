@@ -1053,14 +1053,13 @@ XBSYSAPI EXPORTNUM(109) xbox::void_xt NTAPI xbox::KeInitializeInterrupt
 	Interrupt->BusInterruptLevel = VECTOR2IRQ(Vector);
 	Interrupt->Irql = Irql;
 	Interrupt->Connected = FALSE;
-	// Unused : Interrupt->ShareVector = ShareVector;
+	Interrupt->ShareVector = ShareVector;
 	Interrupt->Mode = InterruptMode;
-	// Interrupt->ServiceCount = 0; // not neccesary?
-
-	// Interrupt->DispatchCode = []?; //TODO : Populate this interrupt dispatch
-	// code block, patch it up so it works with the address of this Interrupt
-	// struct and calls the right dispatch routine (depending on InterruptMode). 
-	LOG_INCOMPLETE();
+	Interrupt->ServiceCount = 0;
+	// DispatchCode contains a small machine-code dispatch stub on real hardware.
+	// In this emulator the service routine is called directly by HalSystemInterrupt::Trigger(),
+	// so the DispatchCode array is not executed; zero-initialize it for safety.
+	memset(Interrupt->DispatchCode, 0, sizeof(Interrupt->DispatchCode));
 }
 
 // ******************************************************************

@@ -492,8 +492,9 @@ XBSYSAPI EXPORTNUM(163) xbox::void_xt FASTCALL xbox::KiUnlockDispatcherDatabase
 	}
 
 	if (OldIrql < DISPATCH_LEVEL) {
-		// FIXME: this is wrong, it should perform a thread switch and check the kthread of the new selected thread for pending APCs.
-		// We can't perform our own threads switching now, so we will just check the current thread
+		// Note: the real kernel would perform a thread switch here and check the newly
+		// selected thread for pending APCs. True preemptive thread switching is not
+		// possible in this emulation architecture, so we only check the current thread.
 
 		if (KeGetCurrentThread()->ApcState.KernelApcPending) {
 			KiExecuteKernelApc();
@@ -501,8 +502,6 @@ XBSYSAPI EXPORTNUM(163) xbox::void_xt FASTCALL xbox::KiUnlockDispatcherDatabase
 	}
 
 	KfLowerIrql(OldIrql);
-
-	LOG_INCOMPLETE(); // TODO : Thread-switch?
 }
 
 // ******************************************************************
