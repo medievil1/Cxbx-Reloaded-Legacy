@@ -29,6 +29,7 @@
 #include "common\xbe\Xbe.h"
 
 #include <thread>
+#include <atomic>
 
 // ******************************************************************
 // * constants
@@ -188,7 +189,10 @@ class WndMain : public Wnd
         // ******************************************************************
         bool        m_bXbeChanged;
         bool        m_bIsStarted;
-        size_t      m_iIsEmulating;
+        // m_iIsEmulating is incremented/decremented from detached CrashMonitorWrapper
+        // threads as well as read from the GUI message thread; use atomic to prevent
+        // data races during rapid XBE reboots in Release builds.
+        std::atomic<size_t> m_iIsEmulating;
 
         // ******************************************************************
         // * cached filenames

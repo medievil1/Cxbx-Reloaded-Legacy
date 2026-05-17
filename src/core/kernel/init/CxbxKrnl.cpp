@@ -864,7 +864,9 @@ void CxbxKrnlEmulate(unsigned int reserved_systems, blocks_reserved_t blocks_res
 	// We must save this handle now to keep the child window working in the case we need to display the UEM
 	HWND hWnd = nullptr;
 	if (cli_config::GetValue(cli_config::hwnd, &tempStr)) {
-		hWnd = (HWND)std::atoi(tempStr.c_str());
+		// Use strtoul (not atoi) so that HWND values with bit 31 set are not
+		// truncated or sign-extended into a wrong handle on 32-bit WoW64 processes.
+		hWnd = (HWND)(uintptr_t)std::strtoul(tempStr.c_str(), nullptr, 10);
 	}
 	CxbxKrnl_hEmuParent = IsWindow(hWnd) ? hWnd : nullptr;
 

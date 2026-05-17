@@ -86,7 +86,16 @@ void ipc_send_gui_update(IPC_UPDATE_GUI command, const unsigned int value)
 
 	// Verify command parameter is valid
 	if (cmdParam != 0) {
-		SendMessage(CxbxKrnl_hEmuParent, WM_PARENTNOTIFY, MAKEWPARAM(WM_COMMAND, cmdParam), value);
+		// KRNL_IS_READY must be synchronous: the kernel immediately waits for
+		// the GUI to call SetIsReady() inside its WndProc handler, so SendMessage
+		// is required.  All other status updates are fire-and-forget; use
+		// PostMessage to avoid blocking the kernel's emulation threads while the
+		// GUI message queue is busy.
+		if (command == IPC_UPDATE_GUI::KRNL_IS_READY) {
+			SendMessage(CxbxKrnl_hEmuParent, WM_PARENTNOTIFY, MAKEWPARAM(WM_COMMAND, cmdParam), value);
+		} else {
+			PostMessage(CxbxKrnl_hEmuParent, WM_PARENTNOTIFY, MAKEWPARAM(WM_COMMAND, cmdParam), value);
+		}
 	}
 }
 #endif
@@ -120,7 +129,9 @@ void ipc_send_kernel_update(IPC_UPDATE_KERNEL command, const int value, const un
 
 	// Verify command parameter is valid
 	if (cmdParam != 0) {
-		SendMessage(reinterpret_cast<HWND>(hwnd), WM_COMMAND, MAKEWPARAM(cmdParam, 0), value);
+		// Use PostMessage so the GUI thread is not blocked waiting for the kernel
+		// render window to process each config-sync message.
+		PostMessage(reinterpret_cast<HWND>(hwnd), WM_COMMAND, MAKEWPARAM(cmdParam, 0), value);
 	}
 }
 

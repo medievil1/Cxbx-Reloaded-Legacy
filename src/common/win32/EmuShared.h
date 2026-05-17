@@ -365,6 +365,7 @@ class EmuShared : public Mutex
 		{
 			Lock();
 			ResetKrnl();
+			m_bReady_status = false;
 			m_bEmulating_status = 0;
 			m_dwKrnlProcID = 0;
 			Unlock();

@@ -44,6 +44,9 @@ void Mutex::Lock()
 {
     LONG _CurrentProcessId = (LONG) GetCurrentProcessId();
     LONG _CurrentThreadId = (LONG) GetCurrentThreadId();
+    // Counts consecutive iterations where a foreign process holds the lock,
+    // used to trigger a periodic dead-process check (every ~100ms).
+    unsigned int stallCount = 0;
     while(true)
     {
         // Grab the lock, letting us look at the variables
@@ -57,6 +60,7 @@ void Mutex::Lock()
         // Are we the the new owner?
         if (!m_OwnerProcess)
         {
+            stallCount = 0;
             // Take ownership
             InterlockedExchange(&m_OwnerProcess, _CurrentProcessId);
             InterlockedExchange(&m_OwnerThread, _CurrentThreadId);
@@ -74,6 +78,29 @@ void Mutex::Lock()
         if ((m_OwnerProcess != _CurrentProcessId) ||
             (m_OwnerThread  != _CurrentThreadId))
         {
+            // Periodically check whether the owning process is still alive.
+            // A process that crashed or was force-terminated (e.g. via
+            // TerminateProcess) may never call Unlock(), leaving the mutex
+            // permanently abandoned.  Detect this and forcibly reclaim it.
+            if (m_OwnerProcess != _CurrentProcessId && ++stallCount >= 100)
+            {
+                stallCount = 0;
+                LONG ownerPID = m_OwnerProcess;
+                HANDLE hOwner = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)ownerPID);
+                bool ownerDead = (hOwner == NULL) ||
+                                 (WaitForSingleObject(hOwner, 0) == WAIT_OBJECT_0);
+                if (hOwner != NULL)
+                    CloseHandle(hOwner);
+                if (ownerDead)
+                {
+                    // Owner process is gone; forcibly reset the mutex so any
+                    // waiting process can acquire it on the next iteration.
+                    InterlockedExchange(&m_OwnerProcess, 0);
+                    InterlockedExchange(&m_OwnerThread, 0);
+                    InterlockedExchange(&m_LockCount, 0);
+                }
+            }
+
             // Unlock the mutex itself
             InterlockedExchange(&m_MutexLock, 0);
 
