@@ -110,10 +110,12 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
   "
   LINK_FLAGS_RELEASE "
   /LTCG \
+  /DEBUG \
   "
  )
 
  # Reference: https://docs.microsoft.com/en-us/cpp/build/reference/compiler-options-listed-alphabetically
+ # /Zi   = create a PDB file without affecting optimization
  # /Ob3  = Controls inline expansion of functions.
  # /Oi   = Generate intrinsic functions
  # /Ot   = In favor of using fast code than small code
@@ -126,6 +128,7 @@ if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "MSVC")
  # Replace CMake's default /Ob2 with /Ob3 for aggressive inlining
  string(REPLACE "/Ob2" "/Ob3" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
  set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} \
+  /Zi \
   /Oi \
   /Ot \
   /GL \
