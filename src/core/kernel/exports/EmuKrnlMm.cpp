@@ -420,7 +420,7 @@ XBSYSAPI EXPORTNUM(181) xbox::ntstatus_xt NTAPI xbox::MmQueryStatistics
 		EmuLog(LOG_LEVEL::DEBUG, "   MemoryStatistics->CachePagesCommitted         = 0x%.08X", MemoryStatistics->CachePagesCommitted);
 		EmuLog(LOG_LEVEL::DEBUG, "   MemoryStatistics->PoolPagesCommitted          = 0x%.08X", MemoryStatistics->PoolPagesCommitted);
 		EmuLog(LOG_LEVEL::DEBUG, "   MemoryStatistics->StackPagesCommitted         = 0x%.08X", MemoryStatistics->StackPagesCommitted);
-		if (MemoryStatistics->Length == sizeof(MM_STATISTICS)) {
+		if (MemoryStatistics->Length >= sizeof(MM_STATISTICS)) {
 			EmuLog(LOG_LEVEL::DEBUG, "   MemoryStatistics->ImagePagesCommitted         = 0x%.08X", MemoryStatistics->ImagePagesCommitted);
 		}
 
