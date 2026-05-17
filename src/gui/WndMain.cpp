@@ -390,6 +390,15 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							Crash_Manager_Data* pCMD = (Crash_Manager_Data*)malloc(sizeof(Crash_Manager_Data));
 							pCMD->pWndMain = this;
 							pCMD->dwChildProcID = lParam; // lParam is process ID.
+
+							// Increment m_iIsEmulating here, synchronously inside SendMessage handling,
+							// BEFORE spawning the thread.  CrashMonitorWrapper watches the process and
+							// decrements when it exits; if the increment happened in the thread itself
+							// there would be a window where the old process's CrashMonitorWrapper
+							// decrements m_iIsEmulating to 0 and triggers StopEmulation() before the
+							// new thread has had a chance to register itself.
+							m_iIsEmulating++;
+
 							std::thread(CrashMonitorWrapper, pCMD).detach();
 
 							g_EmuShared->SetIsEmulating(true); // NOTE: Putting in here raise to low or medium risk due to debugger will launch itself. (Current workaround)
@@ -2448,7 +2457,8 @@ void WndMain::StopEmulation()
 DWORD WndMain::CrashMonitorWrapper(LPVOID lpParam)
 {
 	Crash_Manager_Data* pCMD = (Crash_Manager_Data*)lpParam;
-	static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating++; // Multi-xbe boots usage check
+	// m_iIsEmulating was already incremented synchronously in the KRNL_IS_READY
+	// handler before this thread was spawned.  Do NOT increment here again.
 	static_cast<WndMain*>(pCMD->pWndMain)->CrashMonitor(pCMD->dwChildProcID);
 	// Check if is not zero and avoid accidental decrement.
 	if (static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating) {
