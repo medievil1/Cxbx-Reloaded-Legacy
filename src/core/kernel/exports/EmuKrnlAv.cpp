@@ -50,6 +50,7 @@ namespace NtDll
 #include "devices\Xbox.h" // For g_NV2A
 #include "devices\video\nv2a_int.h"
 #include "devices\video\nv2a.h" // For NV2ABlockInfo, EmuNV2A_Block()
+#include "common\util\cliConfig.hpp"
 
 
 // HW Register helper functions
@@ -269,6 +270,26 @@ bool CxbxAvPersistCurrentDisplayState()
 	g_VMManager.PersistMemory(current.FrameBuffer, current.SurfaceSize, true);
 	g_CxbxAvSavedDisplayState = current;
 	xbox::AvSavedDataAddress = reinterpret_cast<xbox::PVOID>(current.FrameBuffer);
+
+	// Share captured frame pixels with the GUI process so it can replace the splash
+	// screen with the last rendered frame while the new XBE process is starting up.
+	{
+		constexpr DWORD kMaxFrameSize = 4 * 1024 * 1024;
+		DWORD bpp = EmuXBFormatBytesPerPixel(static_cast<xbox::X_D3DFORMAT>(current.Format));
+		if (bpp > 0 && current.SurfaceSize > 0 && current.SurfaceSize <= kMaxFrameSize) {
+			std::string sectionName = "Local\\CxbxCapFrame-" + std::to_string(cli_config::GetSessionID());
+			HANDLE hSection = OpenFileMapping(FILE_MAP_WRITE, FALSE, sectionName.c_str());
+			if (hSection != NULL) {
+				void* pData = MapViewOfFile(hSection, FILE_MAP_WRITE, 0, 0, current.SurfaceSize);
+				if (pData != nullptr) {
+					memcpy(pData, reinterpret_cast<const void*>(current.FrameBuffer), current.SurfaceSize);
+					UnmapViewOfFile(pData);
+				}
+				CloseHandle(hSection);
+				g_EmuShared->SetCapturedFrameMeta(current.Width, current.Height, current.Pitch, bpp, current.SurfaceSize);
+			}
+		}
+	}
 	return true;
 }
 

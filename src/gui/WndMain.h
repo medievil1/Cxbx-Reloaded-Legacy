@@ -177,6 +177,7 @@ class WndMain : public Wnd
 		HPEN        m_Pens[4];
 		int         m_xBmp, m_yBmp;
         HBRUSH      m_BackgroundColor;
+        HANDLE      m_hCapturedFrameSection;
 
         // ******************************************************************
         // * Xbe objects

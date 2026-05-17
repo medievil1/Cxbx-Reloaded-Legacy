@@ -273,6 +273,27 @@ class EmuShared : public Mutex
 		void ClearSavedWindowState() { Lock(); m_bSavedWindowStateValid = false; Unlock(); }
 
 		// ******************************************************************
+		// * Captured frame Accessors (for splash-screen replacement during reboot)
+		// ******************************************************************
+		void GetCapturedFrameValid(bool *valid) { Lock(); *valid = m_bCapturedFrameValid; Unlock(); }
+		void GetCapturedFrameMeta(uint32_t *w, uint32_t *h, uint32_t *pitch, uint32_t *bpp, uint32_t *sz)
+		{
+			Lock();
+			*w = m_CapturedFrameWidth; *h = m_CapturedFrameHeight;
+			*pitch = m_CapturedFramePitch; *bpp = m_CapturedFrameBpp; *sz = m_CapturedFrameSize;
+			Unlock();
+		}
+		void SetCapturedFrameMeta(uint32_t w, uint32_t h, uint32_t pitch, uint32_t bpp, uint32_t sz)
+		{
+			Lock();
+			m_CapturedFrameWidth = w; m_CapturedFrameHeight = h;
+			m_CapturedFramePitch = pitch; m_CapturedFrameBpp = bpp; m_CapturedFrameSize = sz;
+			m_bCapturedFrameValid = true;
+			Unlock();
+		}
+		void ClearCapturedFrameMeta() { Lock(); m_bCapturedFrameValid = false; Unlock(); }
+
+		// ******************************************************************
 		// * ClipCursor flag Accessors
 		// ******************************************************************
 		void GetClipCursorFlag(bool *value) { Lock(); *value = m_bClipCursor; Unlock(); }
@@ -418,6 +439,14 @@ class EmuShared : public Mutex
 		RECT         m_SavedWindowRect;
 		bool         m_bSavedFauxFullscreen;
 		bool         m_bSavedWindowStateValid;
+
+		// Captured frame metadata (for splash-screen replacement during quick reboot)
+		uint32_t     m_CapturedFrameWidth;
+		uint32_t     m_CapturedFrameHeight;
+		uint32_t     m_CapturedFramePitch;
+		uint32_t     m_CapturedFrameBpp;    // bytes per pixel
+		uint32_t     m_CapturedFrameSize;   // total bytes in the frame section
+		bool         m_bCapturedFrameValid;
 };
 
 // ******************************************************************

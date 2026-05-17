@@ -214,6 +214,7 @@ WndMain::WndMain(HINSTANCE x_hInstance) :
 	, m_hDebuggerMonitorThread()
 	, m_prevWindowLoc({ -1, -1 })
 	, m_LogKrnl_status(false)
+	, m_hCapturedFrameSection(NULL)
 {
 	// initialize members
 	{
@@ -490,16 +491,50 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
                 bkRect.bottom -= nLogoBmpH + 10;
 
-                FillRect(hDC, &bkRect, m_BackgroundColor);
+                // During a quick reboot (emu process cycling), show the last captured
+                // frame in the main window area instead of the Cxbx splash screen.
+                bool bDrewCapturedFrame = false;
+                if (m_iIsEmulating > 0 && m_hwndChild == NULL && m_hCapturedFrameSection != NULL) {
+                    bool captureValid = false;
+                    g_EmuShared->GetCapturedFrameValid(&captureValid);
+                    if (captureValid) {
+                        uint32_t fw, fh, fpitch, fbpp, fsz;
+                        g_EmuShared->GetCapturedFrameMeta(&fw, &fh, &fpitch, &fbpp, &fsz);
+                        // Only handle 32-bit BGRA (the most common Xbox display format)
+                        if (fbpp == 4 && fw > 0 && fh > 0 && fsz > 0 && fsz <= (4 * 1024 * 1024)) {
+                            const void* pFrameData = MapViewOfFile(m_hCapturedFrameSection, FILE_MAP_READ, 0, 0, fsz);
+                            if (pFrameData != nullptr) {
+                                BITMAPINFO bmi = {};
+                                bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
+                                bmi.bmiHeader.biWidth       = (LONG)fw;
+                                bmi.bmiHeader.biHeight      = -(LONG)fh; // top-down
+                                bmi.bmiHeader.biPlanes      = 1;
+                                bmi.bmiHeader.biBitCount    = 32;
+                                bmi.bmiHeader.biCompression = BI_RGB;
+                                StretchDIBits(hDC,
+                                    bkRect.left, bkRect.top,
+                                    bkRect.right - bkRect.left, bkRect.bottom - bkRect.top,
+                                    0, 0, (int)fw, (int)fh,
+                                    pFrameData, &bmi, DIB_RGB_COLORS, SRCCOPY);
+                                UnmapViewOfFile(pFrameData);
+                                bDrewCapturedFrame = true;
+                            }
+                        }
+                    }
+                }
+
+                if (!bDrewCapturedFrame) {
+                    FillRect(hDC, &bkRect, m_BackgroundColor);
+
+                    BitBlt(hDC, m_w/2 - splashLogoWidth/2, m_h/2 - splashLogoHeight, splashLogoWidth, splashLogoHeight, m_SplashDC, 0, 0, SRCCOPY);
+
+                    BitBlt(hDC, m_w - gameLogoWidth - 3, m_h - nLogoBmpH - 12 - gameLogoHeight, gameLogoWidth, gameLogoHeight, m_GameLogoDC, 0, 0, SRCCOPY);
+                }
 
                 bkRect.top = bkRect.bottom;
                 bkRect.bottom += nLogoBmpH + 10;
 
                 FillRect(hDC, &bkRect, m_Brushes[0]);
-
-                BitBlt(hDC, m_w/2 - splashLogoWidth/2, m_h/2 - splashLogoHeight, splashLogoWidth, splashLogoHeight, m_SplashDC, 0, 0, SRCCOPY);
-
-				BitBlt(hDC, m_w - gameLogoWidth - 3, m_h - nLogoBmpH - 12 - gameLogoHeight, gameLogoWidth, gameLogoHeight, m_GameLogoDC, 0, 0, SRCCOPY);
 
                 BitBlt(hDC, m_w-nLogoBmpW-4, m_h-nLogoBmpH-4, nLogoBmpW, nLogoBmpH, m_LogoDC, 0, 0, SRCCOPY);
 
@@ -2345,6 +2380,18 @@ void WndMain::StartEmulation(HWND hwndParent, DebuggerState LocalDebuggerState /
 	SetTimer(m_hwnd, TIMERID_ACTIVE_EMULATION, 1000, (TIMERPROC)nullptr);
 	SetTimer(m_hwnd, TIMERID_LED, XBOX_LED_FLASH_PERIOD, (TIMERPROC)nullptr);
 
+	// Create the named shared section that the emu process will write the captured
+	// frame into before quick reboot. Held open here so the data survives process exit.
+	{
+		if (m_hCapturedFrameSection != NULL) {
+			CloseHandle(m_hCapturedFrameSection);
+		}
+		constexpr DWORD kMaxFrameSize = 4 * 1024 * 1024;
+		std::string sectionName = "Local\\CxbxCapFrame-" + std::to_string(cli_config::GetSessionID());
+		m_hCapturedFrameSection = CreateFileMapping(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
+			0, kMaxFrameSize, sectionName.c_str());
+	}
+
 	// shell exe
     {
 
@@ -2440,6 +2487,12 @@ void WndMain::StopEmulation()
 	ResizeWindow(m_hwnd, /*bForGUI=*/true);
 
 	g_EmuShared->SetIsEmulating(false);
+
+	if (m_hCapturedFrameSection != NULL) {
+		CloseHandle(m_hCapturedFrameSection);
+		m_hCapturedFrameSection = NULL;
+	}
+	g_EmuShared->ClearCapturedFrameMeta();
 
 	DrawLedBitmap(m_hwnd, true);
 }
