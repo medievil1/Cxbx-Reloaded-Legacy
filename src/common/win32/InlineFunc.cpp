@@ -77,38 +77,6 @@ std::optional<std::string> CxbxrExec(bool useDebugger, void** hProcess, bool req
 		return std::make_optional<std::string>("Failed to create the new emulation process. CreateProcess failed because: " + WinError2Str());
 	}
 
-	// Place the child process in a Job Object so that it is automatically
-	// terminated when cxbx.exe exits (for any reason: graceful close, crash,
-	// killed via Task Manager).  This is necessary because the render window
-	// uses WS_POPUP (owned) instead of WS_CHILD, so Windows no longer
-	// auto-destroys it when the parent window/process goes away.
-	//
-	// This block is compiled out when building the kernel DLL (CXBXR_EMU),
-	// because the kernel calls CxbxrExec during a software reboot to launch
-	// the next emulation process.  Creating a second job in that context would
-	// assign the new kernel to a job owned by the OLD kernel process, and when
-	// the old kernel exits its job handle would be closed, immediately killing
-	// the newly-launched kernel via JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE.
-	// The new kernel process inherits cxbx.exe's job automatically (because
-	// Windows adds child processes to the parent's job when BREAKAWAY_OK is
-	// not set), so no explicit assignment is needed from the kernel side.
-#ifndef CXBXR_EMU
-	{
-		static HANDLE s_hJob = NULL;
-		if (!s_hJob) {
-			s_hJob = CreateJobObject(NULL, NULL);
-			if (s_hJob) {
-				JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
-				jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-				SetInformationJobObject(s_hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
-			}
-		}
-		if (s_hJob) {
-			AssignProcessToJobObject(s_hJob, processInfo.hProcess);
-		}
-	}
-#endif
-
 	// Allow the child process to call SetForegroundWindow so it can claim
 	// foreground status after creating its render window (WS_POPUP owned by us).
 	AllowSetForegroundWindow(processInfo.dwProcessId);
