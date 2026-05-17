@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -169,7 +169,7 @@ void CallSoftwareInterrupt(const xbox::KIRQL SoftwareIrql)
 	default:
 		// Software Interrupts > 3 map to Hardware Interrupts [4 = IRQ0]
 		// This is used to trigger hardware interrupt routines from software
-		if (EmuInterruptList[SoftwareIrql - 4]->Connected) {
+		if (EmuInterruptList[SoftwareIrql - 4] && EmuInterruptList[SoftwareIrql - 4]->Connected) {
 			HalSystemInterrupts[SoftwareIrql - 4].Trigger(EmuInterruptList[SoftwareIrql - 4]);
 		}
 		break;
@@ -184,10 +184,8 @@ bool AddWaitObject(xbox::PKTHREAD kThread, xbox::PLARGE_INTEGER Timeout)
 	xbox::KiTimerLock();
 	xbox::PKWAIT_BLOCK WaitBlock = &kThread->TimerWaitBlock;
 	kThread->WaitBlockList = WaitBlock;
+	xbox::KiSetupTimerWaitBlock(kThread, WaitBlock, WaitBlock);
 	xbox::PKTIMER Timer = &kThread->Timer;
-	WaitBlock->NextWaitBlock = WaitBlock;
-	Timer->Header.WaitListHead.Flink = &WaitBlock->WaitListEntry;
-	Timer->Header.WaitListHead.Blink = &WaitBlock->WaitListEntry;
 	if (Timeout && Timeout->QuadPart) {
 		// Setup a timer so that KiTimerExpiration can discover the timeout and yield to us.
 		// Otherwise, we will only be able to discover the timeout when Windows decides to schedule us again, and testing shows that
@@ -395,6 +393,14 @@ XBSYSAPI EXPORTNUM(58) xbox::PSLIST_ENTRY FASTCALL xbox::KRNL(InterlockedPushEnt
 // Raises the hardware priority (irq level)
 // NewIrql = Irq level to raise to
 // RETURN VALUE previous irq level
+//
+// NOTE: On real hardware, raising IRQL to DISPATCH_LEVEL or above disables
+// thread preemption — the scheduler cannot switch threads until IRQL is
+// lowered. In Cxbx-Reloaded this is NOT the case: we only store the IRQL
+// value in KPCR. Windows (the host OS) controls actual thread scheduling,
+// so raising IRQL here does NOT prevent preemption. Any code that needs
+// mutual exclusion must use an explicit lock (mutex, spinlock, etc.) in
+// addition to — or instead of — raising IRQL.
 XBSYSAPI EXPORTNUM(160) xbox::KIRQL FASTCALL xbox::KfRaiseIrql
 (
     IN KIRQL NewIrql
@@ -525,7 +531,7 @@ XBSYSAPI EXPORTNUM(361) xbox::int_xt CDECL xbox::RtlSnprintf
 
 	va_list ap;
 	va_start(ap, format);
-	INT Result = snprintf(string, count, format, ap);
+	INT Result = vsnprintf(string, count, format, ap);
 	va_end(ap);
 
 	RETURN(Result);
@@ -550,7 +556,7 @@ XBSYSAPI EXPORTNUM(362) xbox::int_xt CDECL xbox::RtlSprintf
 
 	va_list ap;
 	va_start(ap, format);
-	INT Result = sprintf(string, format, ap);
+	INT Result = vsprintf(string, format, ap);
 	va_end(ap);
 
 	RETURN(Result);

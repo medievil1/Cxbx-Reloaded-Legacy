@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -573,7 +573,9 @@ void VMManager::MemoryStatistics(xbox::PMM_STATISTICS memory_statistics)
 	memory_statistics->CachePagesCommitted = m_PagesByUsage[xbox::CacheType];
 	memory_statistics->PoolPagesCommitted = m_PagesByUsage[xbox::PoolType];
 	memory_statistics->StackPagesCommitted = m_PagesByUsage[xbox::StackType];
-	memory_statistics->ImagePagesCommitted = m_PagesByUsage[xbox::ImageType];
+	if (memory_statistics->Length >= sizeof(xbox::MM_STATISTICS)) {
+		memory_statistics->ImagePagesCommitted = m_PagesByUsage[xbox::ImageType];
+	}
 
 	Unlock();
 }

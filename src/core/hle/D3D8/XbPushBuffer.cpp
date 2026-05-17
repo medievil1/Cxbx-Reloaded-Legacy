@@ -425,8 +425,16 @@ static void D3D11_flip_stall(NV2AState *d)
 		height = (float)g_HostBackBufferDesc.Height;
 	}
 
-	// Blit PGRAPH backbuffer to host backbuffer
-	auto pXboxBackBufferHostSurface = g_pHostPgraphBackBuffer;
+	// Resolve display surface from PCRTC scan-out address (hardware-accurate path).
+	// Falls back to the last-rendered PGRAPH RT if pcrtc.start isn't in the cache
+	// (e.g., during early boot before the first RT at that address is created).
+	ID3D11Texture2D* pXboxBackBufferHostSurface = nullptr;
+	if (d->pcrtc.start != 0) {
+		pXboxBackBufferHostSurface = CxbxLookupPgraphRTByOffset(d->pcrtc.start);
+	}
+	if (!pXboxBackBufferHostSurface) {
+		pXboxBackBufferHostSurface = g_pHostPgraphBackBuffer;
+	}
 	if (pXboxBackBufferHostSurface) {
 		RECT dest{};
 		dest.top = (LONG)((g_HostBackBufferDesc.Height - height) / 2);
@@ -476,9 +484,29 @@ static void D3D11_flip_stall(NV2AState *d)
 			int out_w = GET_MASK(pvideo_size_out, NV_PVIDEO_SIZE_OUT_WIDTH);
 			int out_h = GET_MASK(pvideo_size_out, NV_PVIDEO_SIZE_OUT_HEIGHT);
 
-			// Scale overlay output rect from Xbox framebuffer coords to host backbuffer coords
-			DWORD XboxBackBufferWidth = g_PgraphBackBufferWidth;
-			DWORD XboxBackBufferHeight = g_PgraphBackBufferHeight;
+			// Scale overlay output rect from Xbox framebuffer coords to host backbuffer coords.
+			// Derive dimensions from the resolved display surface when available,
+			// then fall back to PGRAPH tracking, then PRAMDAC flat-panel timing regs.
+			DWORD XboxBackBufferWidth = 0;
+			DWORD XboxBackBufferHeight = 0;
+			if (pXboxBackBufferHostSurface) {
+				D3D11_TEXTURE2D_DESC fbDesc;
+				pXboxBackBufferHostSurface->GetDesc(&fbDesc);
+				XboxBackBufferWidth = fbDesc.Width;
+				XboxBackBufferHeight = fbDesc.Height;
+			}
+			if (XboxBackBufferWidth == 0) XboxBackBufferWidth = g_PgraphBackBufferWidth;
+			if (XboxBackBufferHeight == 0) XboxBackBufferHeight = g_PgraphBackBufferHeight;
+			// Fall back to PRAMDAC flat-panel display end registers (programmed by
+			// the Xbox kernel's display mode setup — gives the true scanout resolution).
+			if (XboxBackBufferWidth == 0) {
+				DWORD fp_h = d->pramdac.regs[RI(NV_PRAMDAC_FP_HDISPLAY_END)];
+				if (fp_h > 0) XboxBackBufferWidth = fp_h + 1;
+			}
+			if (XboxBackBufferHeight == 0) {
+				DWORD fp_v = d->pramdac.regs[RI(NV_PRAMDAC_FP_VDISPLAY_END)];
+				if (fp_v > 0) XboxBackBufferHeight = fp_v + 1;
+			}
 			if (XboxBackBufferWidth == 0) XboxBackBufferWidth = 640;
 			if (XboxBackBufferHeight == 0) XboxBackBufferHeight = 480;
 
@@ -561,6 +589,9 @@ static void D3D11_flip_stall(NV2AState *d)
 		CXBX_PROFILE_SCOPE(PROF_PRESENT_SWAP);
 		CxbxPresent();
 	}
+
+	// Evict stale render target cache entries
+	CxbxPgraphRTCacheEvict();
 
 	// Update FPS counter
 	g_renderbase->UpdateFPSCounter();

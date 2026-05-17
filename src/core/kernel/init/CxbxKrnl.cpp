@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -1155,7 +1155,7 @@ static void CxbxrKrnlInitHacks()
 	// CxbxInitWindow because that function creates the xbox EmuUpdateTickCount thread
 	EmuGenerateFS<true>(xbox::zeroptr, Host2XbStackBaseReserved, Host2XbStackSizeReserved);
 	if (!xbox::ObInitSystem()) {
-		CxbxrAbortEx(LOG_PREFIX_INIT, "Unable to intialize ObInitSystem.");
+		CxbxrAbortEx(LOG_PREFIX_INIT, "Unable to initialize ObInitSystem.");
 	}
 	xbox::PsInitSystem();
 	xbox::KiInitSystem();
@@ -1393,6 +1393,11 @@ static void CxbxrKrnlInitHacks()
 							d->pvideo.pending_interrupts |= NV_PVIDEO_INTR_BUFFER_0;
 						if (pvideo_buffer & NV_PVIDEO_BUFFER_1_USE)
 							d->pvideo.pending_interrupts |= NV_PVIDEO_INTR_BUFFER_1;
+
+						// Wake the puller thread so it can composite and present the
+						// overlay.  During FMV, no pushbuffer activity occurs, so the
+						// puller stays asleep and the overlay is never displayed.
+						qemu_cond_broadcast(&d->pfifo.puller_cond);
 					}
 				}
 
@@ -1433,6 +1438,10 @@ static void CxbxrKrnlInitHacks()
 				}
 			}
 		} while (more_work);
+
+		// Check for present stalls — if no present has arrived in 5 seconds,
+		// dump all thread stacks to diagnose what's blocking progress.
+		EmuCheckPresentStall(5000);
 	}
 }
 

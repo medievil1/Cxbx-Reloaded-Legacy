@@ -12,7 +12,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -1399,7 +1399,7 @@ typedef NTSTATUS (NTAPI *FPTR_NtOpenFile)
 // ******************************************************************
 typedef NTSTATUS (NTAPI *FPTR_NtReadFile)
 (
-    IN  HANDLE          FileHandle,            // TODO: correct paramters
+    IN  HANDLE          FileHandle,
     IN  HANDLE          Event OPTIONAL,
     IN  PVOID           ApcRoutine OPTIONAL,
     IN  PVOID           ApcContext,
@@ -1415,7 +1415,7 @@ typedef NTSTATUS (NTAPI *FPTR_NtReadFile)
 // ******************************************************************
 typedef NTSTATUS (NTAPI *FPTR_NtWriteFile)
 (
-    IN  HANDLE          FileHandle,            // TODO: correct paramters
+    IN  HANDLE          FileHandle,
     IN  HANDLE          Event OPTIONAL,
     IN  PVOID           ApcRoutine OPTIONAL,
     IN  PVOID           ApcContext,
@@ -1436,7 +1436,7 @@ typedef VOID (NTAPI *FPTR_NtYieldExecution)();
 // ******************************************************************
 typedef NTSTATUS (NTAPI *FPTR_NtSetInformationFile)
 (
-    IN  HANDLE  FileHandle,            // TODO: correct paramters
+    IN  HANDLE  FileHandle,
     OUT PVOID   IoStatusBlock,
     IN  PVOID   FileInformation,
     IN  ULONG   Length,

@@ -364,7 +364,6 @@ typedef struct PGRAPHState {
 
 	unsigned int draw_arrays_length;
 	unsigned int draw_arrays_max_count;
-	bool draw_arrays_squash_pending;   // END with draw_arrays was deferred for cross-bracket merging
 	bool draw_arrays_prevent_connect;  // Don't merge adjacent entries across bracket boundaries
 
 	int32_t draw_arrays_start[1250];
@@ -480,6 +479,7 @@ typedef struct NV2AState {
         uint32_t enabled_interrupts;
         hwaddr start;
         uint32_t vblank_count; // Incremented each VBlank; bit 0 determines interlace field (even/odd)
+        uint32_t last_present_vblank; // VBlank count at last present (prevents double-present)
 		uint32_t* regs; // Backed by g_pNV2AMMIO + NV2A_MMIO_OFF_PCRTC
     } pcrtc;
 
@@ -503,7 +503,19 @@ typedef struct NV2AState {
 	struct {
 		uint8_t cr_index;
 		uint8_t cr[256]; /* CRT registers */
+		uint8_t ar_index;
+		uint8_t ar[0x15]; /* Attribute Controller registers (VGA_ATT_C) */
+		bool    ar_flip_flop;  /* false=index, true=data */
 	} prmcio; // Not in xqemu/openxbox?
+
+	// PRMVIO: VGA Sequencer and Graphics Controller
+	struct {
+		uint8_t seq_index;
+		uint8_t seq[256];   /* Sequencer registers (VGA_SEQ_C used) */
+		uint8_t gfx_index;
+		uint8_t gfx[256];   /* Graphics Controller registers (VGA_GFX_C used) */
+		uint8_t misc_output; /* Misc Output Register */
+	} prmvio;
 } NV2AState;
 
 typedef value_t(*read_func)(NV2AState *d, hwaddr addr); //, unsigned int size);

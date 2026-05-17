@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -706,7 +706,7 @@ void CxbxLaunchNewXbe(const std::string& XbePath) {
 	}
 	else
 	{
-		if (const auto &err = CxbxrExec(false, nullptr, false))
+		if (const auto &err = CxbxrExec(false, nullptr, false, /*isReboot=*/true))
 		{
 			CxbxrAbort("Could not launch %s\n\nThe reason was: %s", XbePath.c_str(), err->c_str());
 		}

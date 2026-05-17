@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -993,10 +993,19 @@ xbox::ntstatus_xt NTAPI xbox::IopParseDevice(
 		// Then it must be from xbox's end which we don't have any support.
 		if (!UseDummyFile) {
 			ObfDereferenceObject(FileObject);
+			// Note: IopDeleteFile (the FILE_OBJECT delete procedure) handles
+			// decrementing DeviceObject->ReferenceCount when freeing the FileObject.
 		}
-		reinterpret_cast<PDEVICE_OBJECT>(ParseObject)->ReferenceCount--;
+		else {
+			// Dummy file objects are stack-allocated so they can't be ObfDereferenced,
+			// but we still need to balance the refcount from IopCheckDeviceAndDriver.
+			reinterpret_cast<PDEVICE_OBJECT>(ParseObject)->ReferenceCount--;
+		}
+		OpenPacket->FileObject = nullptr;
+		OpenPacket->ParseCheck = true;
+		OpenPacket->FinalStatus = X_STATUS_OBJECT_NAME_NOT_FOUND;
 		EmuLog(LOG_LEVEL::ERROR2, "IopParseDevice attempt call GetObjectNativeHandle could not find any.");
-		return X_STATUS_OBJECT_NAME_NOT_FOUND;
+		RETURN(X_STATUS_OBJECT_NAME_NOT_FOUND);
 	}
 
 	// We don't need slash, so let's go ahead remove it as Windows doesn't support it.
@@ -1096,6 +1105,25 @@ xbox::ntstatus_xt NTAPI xbox::IopParseDevice(
 	else {
 		std::string xPathName(CompleteName->Buffer, CompleteName->Length);
 		EmuLog(LOG_LEVEL::ERROR2, "Unable to access directory or file: %s", xPathName.c_str());
+
+		// NtCreateFile failed — clean up the FileObject that was allocated
+		// for this operation.  Without this, the FileObject (and its
+		// DeviceObject reference) would be leaked because ParseCheck=true
+		// prevents the caller (IoCreateFile) from running its cleanup path.
+		// Note: IopDeleteFile (the FILE_OBJECT delete procedure) handles
+		// decrementing DeviceObject->ReferenceCount when freeing the FileObject.
+		if (!UseDummyFile) {
+			ObfDereferenceObject(FileObject);
+		}
+		else {
+			// Dummy file objects are stack-allocated so they can't be ObfDereferenced,
+			// but we still need to balance the refcount from IopCheckDeviceAndDriver.
+			reinterpret_cast<PDEVICE_OBJECT>(ParseObject)->ReferenceCount--;
+		}
+		OpenPacket->FileObject = nullptr;
+		OpenPacket->ParseCheck = true;
+		OpenPacket->FinalStatus = result;
+		RETURN(result);
 	}
 #endif
 

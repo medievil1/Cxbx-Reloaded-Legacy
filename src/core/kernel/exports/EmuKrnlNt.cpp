@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -92,6 +92,21 @@ static xbox::boolean_xt KeRemoveQueueApc(IN xbox::PRKAPC Apc)
 
 	xbox::KiApcListMtx.unlock();
 	return Inserted;
+}
+
+// Cancel an ETIMER's kernel timer and tear down any APC association.
+// Caller must hold Timer->Lock.
+static void ExpCancelTimer(PETIMER Timer)
+{
+	if (Timer->ApcAssociated) {
+		Timer->ApcAssociated = FALSE;
+		xbox::KeCancelTimer(&Timer->KeTimer);
+		KeRemoveQueueDpc(&Timer->TimerDpc);
+		KeRemoveQueueApc(&Timer->TimerApc);
+	}
+	else {
+		xbox::KeCancelTimer(&Timer->KeTimer);
+	}
 }
 
 // Source: ReactOS, modified for xbox compatibility layer
@@ -194,22 +209,10 @@ XBSYSAPI EXPORTNUM(185) xbox::ntstatus_xt NTAPI xbox::NtCancelTimer
 		PETIMER Timer = (PETIMER)Object;
 
 		Timer->Lock.lock();
-
-		// Cancel any pending APC association
-		if (Timer->ApcAssociated) {
-			Timer->ApcAssociated = FALSE;
-			KeCancelTimer(&Timer->KeTimer);
-			KeRemoveQueueDpc(&Timer->TimerDpc);
-			KeRemoveQueueApc(&Timer->TimerApc);
-		}
-		else {
-			KeCancelTimer(&Timer->KeTimer);
-		}
-
-		Timer->Lock.unlock();
-
+		ExpCancelTimer(Timer);
 		// Read the signal state
 		BOOLEAN State = (BOOLEAN)Timer->KeTimer.Header.SignalState;
+		Timer->Lock.unlock();
 
 		ObfDereferenceObject(Timer);
 
@@ -661,7 +664,7 @@ namespace xbox {
 			case fsctl_dismount_volume: {
 
 				if (DeviceObject->DeviceType == FILE_DEVICE_DISK2) {
-					// HACK: this should just free the resources assocoated with the volume, it should not reformat it
+					// HACK: this should just free the resources associated with the volume, it should not reformat it
 					xbox::PIDE_DISK_EXTENSION DeviceExtension = reinterpret_cast<xbox::PIDE_DISK_EXTENSION>(DeviceObject->DeviceExtension);
 					dword_xt PartitionNumber = DeviceExtension->PartitionInformation.PartitionNumber;
 					if (EmuDiskFormatPartition(PartitionNumber)) {
@@ -1095,7 +1098,7 @@ XBSYSAPI EXPORTNUM(207) xbox::ntstatus_xt NTAPI xbox::NtQueryDirectoryFile
 (
 	IN  HANDLE                      FileHandle,
 	IN  HANDLE                      Event OPTIONAL,
-	IN  PVOID                       ApcRoutine, // Todo: define this routine's prototype
+	IN  PIO_APC_ROUTINE             ApcRoutine OPTIONAL,
 	IN  PVOID                       ApcContext,
 	OUT PIO_STATUS_BLOCK            IoStatusBlock,
 	OUT FILE_DIRECTORY_INFORMATION *FileInformation,
@@ -1136,9 +1139,26 @@ XBSYSAPI EXPORTNUM(207) xbox::ntstatus_xt NTAPI xbox::NtQueryDirectoryFile
 		return X_STATUS_INVALID_PARAMETER;
 	}
 
+	// Resolve the optional Xbox Event handle to the kernel event object.
+	// We signal it on completion (the host NtQueryDirectoryFile call is
+	// synchronous, so we just signal immediately after the query returns).
+	PKEVENT EventObject = zeroptr;
+	if (Event != zeroptr) {
+		result = ObReferenceObjectByHandle(Event, &ExEventObjectType, reinterpret_cast<PVOID*>(&EventObject));
+		if (!X_NT_SUCCESS(result)) {
+			ObfDereferenceObject(FileObject);
+			RETURN(result);
+		}
+	}
+
 	PIO_COMPLETION_CONTEXT CompletionContext = FileObject->CompletionContext;
 
 	const auto& nFileHandle = GetObjectNativeHandle(FileObject);
+	if (!nFileHandle) {
+		if (EventObject) { ObfDereferenceObject(EventObject); }
+		ObfDereferenceObject(FileObject);
+		RETURN(X_STATUS_INVALID_HANDLE);
+	}
 
 	NtDll::UNICODE_STRING NtFileMask;
 
@@ -1148,7 +1168,7 @@ XBSYSAPI EXPORTNUM(207) xbox::ntstatus_xt NTAPI xbox::NtQueryDirectoryFile
 	{
 		if (FileMask != 0) {
 			// Xbox expects directories to be listed when *.* is passed
-			if (strncmp(FileMask->Buffer, "*.*", FileMask->Length) == 0) {
+			if (FileMask->Length == 3 && strncmp(FileMask->Buffer, "*.*", 3) == 0) {
 				FileMask->Length = 1;
 				std::strcpy(FileMask->Buffer, "*");
 			}
@@ -1162,6 +1182,11 @@ XBSYSAPI EXPORTNUM(207) xbox::ntstatus_xt NTAPI xbox::NtQueryDirectoryFile
 
 	NtDll::FILE_DIRECTORY_INFORMATION *NtFileDirInfo = 
 		(NtDll::FILE_DIRECTORY_INFORMATION *) malloc(NtFileDirectoryInformationSize + NtPathBufferSize);
+	if (NtFileDirInfo == nullptr) {
+		if (EventObject) { ObfDereferenceObject(EventObject); }
+		ObfDereferenceObject(FileObject);
+		RETURN(X_STATUS_NO_MEMORY);
+	}
 
 	// Short-hand pointer to Nt filename :
 	wchar_t *wcstr = NtFileDirInfo->FileName;
@@ -1174,7 +1199,7 @@ XBSYSAPI EXPORTNUM(207) xbox::ntstatus_xt NTAPI xbox::NtQueryDirectoryFile
 
 		ret = NtDll::NtQueryDirectoryFile(
 			*nFileHandle,
-			Event, 
+			NULL,
 			(NtDll::PIO_APC_ROUTINE)ApcRoutine,
 			ApcContext,
 			(NtDll::IO_STATUS_BLOCK*)IoStatusBlock, 
@@ -1193,7 +1218,10 @@ XBSYSAPI EXPORTNUM(207) xbox::ntstatus_xt NTAPI xbox::NtQueryDirectoryFile
 
 	// convert from PC to Xbox
 	{
-		// TODO : assert that NtDll::FILE_DIRECTORY_INFORMATION has same members and size as xbox::FILE_DIRECTORY_INFORMATION
+		// Verify that the fixed-size header (all fields before FileName) has identical layout in both structs,
+		// since we memcpy from NtDll's wide-char version into the Xbox narrow-char version up to FileName.
+		static_assert(offsetof(NtDll::FILE_DIRECTORY_INFORMATION, FileName) == offsetof(xbox::FILE_DIRECTORY_INFORMATION, FileName),
+			"FILE_DIRECTORY_INFORMATION layout mismatch before FileName");
 		memcpy(/*Dst=*/FileInformation, /*Src=*/NtFileDirInfo, /*Size=*/NtFileDirectoryInformationSize);
 		wcstombs(/*Dest=*/mbstr, /*Source=*/wcstr, MAX_PATH);
 		FileInformation->FileNameLength /= sizeof(wchar_t);
@@ -1211,6 +1239,12 @@ XBSYSAPI EXPORTNUM(207) xbox::ntstatus_xt NTAPI xbox::NtQueryDirectoryFile
 			ApcContext,
 			IoStatusBlock->Status,
 			static_cast<ulong_xt>(IoStatusBlock->Information));
+	}
+
+	// Signal the Xbox event to notify the caller that the I/O completed.
+	if (EventObject != zeroptr) {
+		KeSetEvent(EventObject, 0/*IO_NO_INCREMENT*/, FALSE);
+		ObfDereferenceObject(EventObject);
 	}
 
 	ObfDereferenceObject(FileObject);
@@ -1813,8 +1847,17 @@ XBSYSAPI EXPORTNUM(218) xbox::ntstatus_xt NTAPI xbox::NtQueryVolumeInformationFi
 	}
 
 	PVOID NativeFileInformation = _aligned_malloc(HostBufferSize, 8);
+	if (NativeFileInformation == nullptr) {
+		ObfDereferenceObject(FileObject);
+		RETURN(X_STATUS_NO_MEMORY);
+	}
 
 	const auto& nFileHandle = GetObjectNativeHandle(FileObject);
+	if (!nFileHandle) {
+		_aligned_free(NativeFileInformation);
+		ObfDereferenceObject(FileObject);
+		RETURN(X_STATUS_INVALID_HANDLE);
+	}
 
 	NTSTATUS ret = NtDll::NtQueryVolumeInformationFile(
 		*nFileHandle,
@@ -1832,11 +1875,12 @@ XBSYSAPI EXPORTNUM(218) xbox::ntstatus_xt NTAPI xbox::NtQueryVolumeInformationFi
 					// Most options can just be directly copied to the Xbox version, only the strings differ
 					XboxVolumeInfo->VolumeCreationTime.QuadPart = HostVolumeInfo->VolumeCreationTime.QuadPart;
 					XboxVolumeInfo->VolumeSerialNumber = HostVolumeInfo->VolumeSerialNumber;
-					XboxVolumeInfo->VolumeLabelLength = HostVolumeInfo->VolumeLabelLength;
+					// Host VolumeLabelLength is in wide-char bytes; Xbox uses ANSI (1 byte/char)
+					XboxVolumeInfo->VolumeLabelLength = HostVolumeInfo->VolumeLabelLength / sizeof(wchar_t);
 					XboxVolumeInfo->SupportsObjects = HostVolumeInfo->SupportsObjects;
 
 					// Convert strings to the Xbox format 
-					wcstombs(XboxVolumeInfo->VolumeLabel, HostVolumeInfo->VolumeLabel, HostVolumeInfo->VolumeLabelLength);
+					wcstombs(XboxVolumeInfo->VolumeLabel, HostVolumeInfo->VolumeLabel, XboxVolumeInfo->VolumeLabelLength);
 				}
 				break;
 			default:
@@ -1863,7 +1907,7 @@ XBSYSAPI EXPORTNUM(218) xbox::ntstatus_xt NTAPI xbox::NtQueryVolumeInformationFi
 // ******************************************************************
 XBSYSAPI EXPORTNUM(219) xbox::ntstatus_xt NTAPI xbox::NtReadFile
 (
-	IN  HANDLE          FileHandle,            // TODO: correct paramters
+	IN  HANDLE          FileHandle,
 	IN  HANDLE          Event OPTIONAL,
 	IN  PIO_APC_ROUTINE ApcRoutine OPTIONAL,
 	IN  PVOID           ApcContext,
@@ -1938,10 +1982,12 @@ XBSYSAPI EXPORTNUM(219) xbox::ntstatus_xt NTAPI xbox::NtReadFile
 	PKEVENT XboxEvent = nullptr;
 	if (Event != nullptr) {
 		PVOID EventObject;
-		ntstatus_xt evResult = ObReferenceObjectByHandle(Event, nullptr, &EventObject);
-		if (X_NT_SUCCESS(evResult)) {
-			XboxEvent = reinterpret_cast<PKEVENT>(EventObject);
+		ntstatus_xt evResult = ObReferenceObjectByHandle(Event, &ExEventObjectType, &EventObject);
+		if (!X_NT_SUCCESS(evResult)) {
+			ObfDereferenceObject(FileObject);
+			RETURN(evResult);
 		}
+		XboxEvent = reinterpret_cast<PKEVENT>(EventObject);
 	}
 
 	// Save the original APC routine/context before we potentially clear them
@@ -1954,6 +2000,9 @@ XBSYSAPI EXPORTNUM(219) xbox::ntstatus_xt NTAPI xbox::NtReadFile
 		HANDLE hHostEvent = NULL;
 		if (XboxEvent != nullptr || ApcRoutine != nullptr) {
 			hHostEvent = CreateEvent(NULL, /*bManualReset=*/TRUE, /*bInitialState=*/FALSE, NULL);
+			if (hHostEvent == NULL) {
+				EmuLog(LOG_LEVEL::WARNING, "NtReadFile: CreateEvent failed, forcing synchronous I/O");
+			}
 		}
 
 		result = NtDll::NtReadFile(
@@ -2373,6 +2422,10 @@ XBSYSAPI EXPORTNUM(226) xbox::ntstatus_xt NTAPI xbox::NtSetInformationFile
 				std::wstring convertedFileName = string_to_wstring(FileName);
 				Length = sizeof(NtDll::FILE_RENAME_INFORMATION) + convertedFileName.size() * sizeof(wchar_t);
 				NtDll::FILE_RENAME_INFORMATION* ntRenameInfo = reinterpret_cast<NtDll::FILE_RENAME_INFORMATION*>(ExAllocatePool(Length));
+				if (ntRenameInfo == nullptr) {
+					result = X_STATUS_INSUFFICIENT_RESOURCES;
+					break;
+				}
 				ntRenameInfo->ReplaceIfExists = xboxRenameInfo->ReplaceIfExists;
 				ntRenameInfo->RootDirectory = *ParentDirHandle;
 				ntRenameInfo->FileNameLength = convertedFileName.size() * sizeof(wchar_t);
@@ -2414,6 +2467,10 @@ XBSYSAPI EXPORTNUM(226) xbox::ntstatus_xt NTAPI xbox::NtSetInformationFile
 				std::wstring convertedFileName = string_to_wstring(FileName);
 				Length = sizeof(NtDll::FILE_RENAME_INFORMATION) + convertedFileName.size() * sizeof(wchar_t);
 				NtDll::FILE_RENAME_INFORMATION* ntRenameInfo = reinterpret_cast<NtDll::FILE_RENAME_INFORMATION*>(ExAllocatePool(Length));
+				if (ntRenameInfo == nullptr) {
+					result = X_STATUS_INSUFFICIENT_RESOURCES;
+					break;
+				}
 				ntRenameInfo->ReplaceIfExists = xboxLinkInfo->ReplaceIfExists;
 				ntRenameInfo->RootDirectory = *ParentDirHandle;
 				ntRenameInfo->FileNameLength = convertedFileName.size() * sizeof(wchar_t);
@@ -2477,10 +2534,10 @@ XBSYSAPI EXPORTNUM(226) xbox::ntstatus_xt NTAPI xbox::NtSetInformationFile
 			ntFileInfo,
 			Length,
 			FileInformationClass);
+	}
 
-		if (FileHandleTarget) {
-			NtClose(FileHandleTarget);
-		}
+	if (FileHandleTarget) {
+		NtClose(FileHandleTarget);
 	}
 
 	if (isXbox2Nt && ntFileInfo) {
@@ -2616,17 +2673,7 @@ XBSYSAPI EXPORTNUM(229) xbox::ntstatus_xt NTAPI xbox::NtSetTimerEx
 		PETIMER Timer = (PETIMER)Object;
 
 		Timer->Lock.lock();
-
-		// Cancel any previous APC association
-		if (Timer->ApcAssociated) {
-			Timer->ApcAssociated = FALSE;
-			KeCancelTimer(&Timer->KeTimer);
-			KeRemoveQueueDpc(&Timer->TimerDpc);
-			KeRemoveQueueApc(&Timer->TimerApc);
-		}
-		else {
-			KeCancelTimer(&Timer->KeTimer);
-		}
+		ExpCancelTimer(Timer);
 
 		// Read the previous signal state
 		BOOLEAN State = (BOOLEAN)Timer->KeTimer.Header.SignalState;
@@ -3004,10 +3051,12 @@ XBSYSAPI EXPORTNUM(236) xbox::ntstatus_xt NTAPI xbox::NtWriteFile
 	PKEVENT XboxEvent = nullptr;
 	if (Event != nullptr) {
 		PVOID EventObject;
-		ntstatus_xt evResult = ObReferenceObjectByHandle(Event, nullptr, &EventObject);
-		if (X_NT_SUCCESS(evResult)) {
-			XboxEvent = reinterpret_cast<PKEVENT>(EventObject);
+		ntstatus_xt evResult = ObReferenceObjectByHandle(Event, &ExEventObjectType, &EventObject);
+		if (!X_NT_SUCCESS(evResult)) {
+			ObfDereferenceObject(FileObject);
+			RETURN(evResult);
 		}
+		XboxEvent = reinterpret_cast<PKEVENT>(EventObject);
 	}
 
 	// Save the original APC routine/context
@@ -3020,6 +3069,9 @@ XBSYSAPI EXPORTNUM(236) xbox::ntstatus_xt NTAPI xbox::NtWriteFile
 		HANDLE hHostEvent = NULL;
 		if (XboxEvent != nullptr || ApcRoutine != nullptr) {
 			hHostEvent = CreateEvent(NULL, /*bManualReset=*/TRUE, /*bInitialState=*/FALSE, NULL);
+			if (hHostEvent == NULL) {
+				EmuLog(LOG_LEVEL::WARNING, "NtWriteFile: CreateEvent failed, forcing synchronous I/O");
+			}
 		}
 
 		result = NtDll::NtWriteFile(

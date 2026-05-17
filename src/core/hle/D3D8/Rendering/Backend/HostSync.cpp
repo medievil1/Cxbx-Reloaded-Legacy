@@ -258,10 +258,23 @@ static ID3D11Resource* CxbxResolveTextureSource(
 		return nullptr;
 
 	// Check if this texture offset corresponds to a render target.
-	// Only treat as RT-texture if the offset is NOT the currently bound
-	// color surface or depth surface.
-	if (texOffset != pg->regs[RI(NV_PGRAPH_BOFFSET4)]
-		&& texOffset != pg->regs[RI(NV_PGRAPH_BOFFSET3)]) {
+
+	// Special case: texOffset matches currently bound RT/DS.
+	// Shadow mapping: game may read depth texture while it's still "bound".
+	if (texOffset == pg->regs[RI(NV_PGRAPH_BOFFSET4)]
+		|| texOffset == pg->regs[RI(NV_PGRAPH_BOFFSET3)]) {
+		auto pPgraphRT = CxbxLookupPgraphRTByOffset(texOffset);
+		if (pPgraphRT) {
+			EmuLog(LOG_LEVEL::WARNING, "CxbxResolveTextureSource: texOffset=0x%08X matches bound surface (BOFFSET3=0x%08X BOFFSET4=0x%08X) but found in RT cache — using RT texture (shadow map?)",
+				texOffset, pg->regs[RI(NV_PGRAPH_BOFFSET3)], pg->regs[RI(NV_PGRAPH_BOFFSET4)]);
+			bIsRenderTargetTexture = true;
+			CxbxInvalidatePgraphRTBinding();
+			return pPgraphRT;
+		}
+	}
+	// Normal RT-as-texture: if the offset was previously rendered to,
+	// use the cached host RT directly.
+	else {
 		auto pPgraphRT = CxbxLookupPgraphRTByOffset(texOffset);
 		if (pPgraphRT) {
 			ID3D11Resource* pResult = nullptr;
@@ -276,17 +289,6 @@ static ID3D11Resource* CxbxResolveTextureSource(
 			bIsRenderTargetTexture = true;
 			CxbxInvalidatePgraphRTBinding();
 			return pResult;
-		}
-	} else {
-		// texOffset matches currently bound RT/DS — check if it's in the cache anyway
-		// (shadow mapping: game may read depth texture while it's still "bound" as BOFFSET4)
-		auto pPgraphRT = CxbxLookupPgraphRTByOffset(texOffset);
-		if (pPgraphRT) {
-			EmuLog(LOG_LEVEL::WARNING, "CxbxResolveTextureSource: texOffset=0x%08X matches bound surface (BOFFSET3=0x%08X BOFFSET4=0x%08X) but found in RT cache — using RT texture (shadow map?)",
-				texOffset, pg->regs[RI(NV_PGRAPH_BOFFSET3)], pg->regs[RI(NV_PGRAPH_BOFFSET4)]);
-			bIsRenderTargetTexture = true;
-			CxbxInvalidatePgraphRTBinding();
-			return pPgraphRT;
 		}
 	}
 
@@ -910,8 +912,9 @@ void CxbxUpdateNativeD3DResources()
 	// Single pg pointer for the entire per-draw state update sequence.
 	PGRAPHState *pg = &g_NV2A->GetDeviceState()->pgraph;
 
-	// Before we start, make sure our resource cache stays limited in size
-	PrunePaletizedTexturesCache(); // TODO : Could we move this to Swap instead?
+	// Before we start, make sure our resource caches stay limited in size
+	PrunePaletizedTexturesCache();
+	PruneResourceCache();
 
 	// NOTE: Vertex shader must be updated before vertex declaration,
 	// because D3D11 input layout creation depends on compiled VS bytecode

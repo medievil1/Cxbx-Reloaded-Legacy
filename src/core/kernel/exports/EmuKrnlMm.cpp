@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -159,6 +159,10 @@ XBSYSAPI EXPORTNUM(169) xbox::PVOID NTAPI xbox::MmCreateKernelStack
 
 	PVOID addr = (PVOID)g_VMManager.AllocateSystemMemory(DebuggerThread ? DebuggerType : StackType,
 		XBOX_PAGE_READWRITE, NumberOfBytes, true);
+
+	if (addr == NULL) {
+		RETURN(NULL);
+	}
 
 	// Since this is creating a stack (which counts DOWN) we must return the *end* of the address range, not the start
 	// Test cases: DOA3, Futurama
@@ -402,7 +406,9 @@ XBSYSAPI EXPORTNUM(181) xbox::ntstatus_xt NTAPI xbox::MmQueryStatistics
 		RETURN(STATUS_INVALID_PARAMETER);
 	}
 
-	if (MemoryStatistics->Length == sizeof(MM_STATISTICS))
+	// Accept any Length that covers at least the pre-ImagePagesCommitted fields (0x20).
+	// Older XDK versions used an MM_STATISTICS without the ImagePagesCommitted field.
+	if (MemoryStatistics->Length >= offsetof(MM_STATISTICS, ImagePagesCommitted))
 	{
 		g_VMManager.MemoryStatistics(MemoryStatistics);
 
@@ -414,7 +420,9 @@ XBSYSAPI EXPORTNUM(181) xbox::ntstatus_xt NTAPI xbox::MmQueryStatistics
 		EmuLog(LOG_LEVEL::DEBUG, "   MemoryStatistics->CachePagesCommitted         = 0x%.08X", MemoryStatistics->CachePagesCommitted);
 		EmuLog(LOG_LEVEL::DEBUG, "   MemoryStatistics->PoolPagesCommitted          = 0x%.08X", MemoryStatistics->PoolPagesCommitted);
 		EmuLog(LOG_LEVEL::DEBUG, "   MemoryStatistics->StackPagesCommitted         = 0x%.08X", MemoryStatistics->StackPagesCommitted);
-		EmuLog(LOG_LEVEL::DEBUG, "   MemoryStatistics->ImagePagesCommitted         = 0x%.08X", MemoryStatistics->ImagePagesCommitted);
+		if (MemoryStatistics->Length >= sizeof(MM_STATISTICS)) {
+			EmuLog(LOG_LEVEL::DEBUG, "   MemoryStatistics->ImagePagesCommitted         = 0x%.08X", MemoryStatistics->ImagePagesCommitted);
+		}
 
 		ret = X_STATUS_SUCCESS;
 	}

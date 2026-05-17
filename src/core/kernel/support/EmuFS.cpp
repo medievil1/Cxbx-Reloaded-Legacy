@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -179,7 +179,7 @@ void EmuKeSetPcr(xbox::KPCR *Pcr)
 	// In the Xbox there's only be KPCR (as it's a per-processor-
 	// structure, and the Xbox has only one processor).
 	//
-	// Since Cxbx doesn't control thread-swiches (yet), each thread
+	// Since Cxbx doesn't control thread-switches (yet), each thread
 	// must have a thread-specific copy of the KPCR, to contain all
 	// thread-specific data that can be reached via this structure
 	// (like the NT_TIB structure and ETHREAD CurrentThread pointer).

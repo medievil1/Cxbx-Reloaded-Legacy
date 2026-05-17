@@ -137,7 +137,9 @@ multiple RT offsets for the backbuffer. All matching offsets are accumulated in
 points to the most recently rendered one.
 
 **Auto-present fallback:** For raw pushbuffer games that never call FLIP_STALL,
-the puller thread auto-presents on VBlank if `!g_pgraph_explicit_flip_stall_seen`.
+the puller thread auto-presents on VBlank if `!g_pgraph_explicit_flip_stall_seen`
+and `draw_dirty` is set.  During FMV (overlay active, no 3D draws), the DPC
+thread wakes the puller so it composites and presents the PVIDEO overlay.
 
 **When synced to CPU:** Same as RT readback — only if Xbox CPU reads the framebuffer
 pages (extremely rare; typically only for screenshots or save-game thumbnails).

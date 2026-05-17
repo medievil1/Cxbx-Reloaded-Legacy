@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -171,8 +171,19 @@ static xbox::void_xt PspCallThreadNotificationRoutines(xbox::PETHREAD eThread, x
 	}
 }
 
+// Remove a thread from KiUniqueProcess.ThreadListHead and decrement StackCount.
+// Used to undo KeInitializeThread's insertion on PsCreateSystemThreadEx failure paths.
+static void PspRemoveThreadFromProcess(xbox::PETHREAD eThread)
+{
+	xbox::KIRQL OldIrql = xbox::KeRaiseIrqlToDpcLevel();
+	RemoveEntryList(&eThread->Tcb.ThreadListEntry);
+	KiUniqueProcess.StackCount--;
+	xbox::KfLowerIrql(OldIrql);
+}
+
 // Source: ReactOS
 xbox::LIST_ENTRY PspReaperListHead;
+static std::mutex g_ReaperListMtx;
 xbox::void_xt NTAPI PspReaperRoutine(
 	IN xbox::PKDPC Dpc,
 	IN xbox::PVOID DeferredContext,
@@ -184,6 +195,12 @@ xbox::void_xt NTAPI PspReaperRoutine(
 	xbox::PLIST_ENTRY NextEntry;
 	PETHREAD Thread;
 	//PSTRACE(PS_KILL_DEBUG, "Context: %p\n", Context);
+
+	// Acquire the reaper list lock to synchronize with PsTerminateSystemThread's
+	// InsertTailList.  On real hardware, DPCs are serialized on the uniprocessor
+	// Xbox, but in the emulator, DPCs and terminating threads run on separate
+	// host threads and can race on the list.
+	std::unique_lock lck(g_ReaperListMtx);
 
 	/* Write magic value and return the next entry to process */
 	NextEntry = PspReaperListHead.Flink;
@@ -362,13 +379,22 @@ XBSYSAPI EXPORTNUM(255) xbox::ntstatus_xt NTAPI xbox::PsCreateSystemThreadEx
 		// Start thread initialization process here before insert and create thread
 		KeInitializeThread(&eThread->Tcb, KernelStack, KernelStackSize, TlsDataSize, SystemRoutine, StartRoutine, StartContext, &KiUniqueProcess);
 
+		// Take an extra reference so eThread survives ObInsertObject's unconditional
+		// ObfDereferenceObject on failure, allowing us to clean up the thread list.
+		ObfReferenceObject(eThread);
+
 		// The ob handle of the ethread obj is the thread id we return to the title
 		result = ObInsertObject(eThread, zeroptr, 0, &eThread->UniqueThread);
 		if (!X_NT_SUCCESS(result)) {
-			// ObInsertObject always calls ObfDereferenceObject on the object
-			// (even on failure), so do NOT dereference again here.
+			// ObInsertObject already dereferenced eThread once, but our extra ref keeps it alive.
+			// Undo KeInitializeThread's thread list insertion and free the kernel stack.
+			PspRemoveThreadFromProcess(eThread);
+			MmDeleteKernelStack(eThread->Tcb.StackBase, eThread->Tcb.StackLimit);
+			ObfDereferenceObject(eThread); // Release extra ref, frees eThread
 			RETURN(result);
 		}
+		// Release the extra reference (handle reference keeps eThread alive)
+		ObfDereferenceObject(eThread);
 
 		if (g_iThreadNotificationCount) {
 			PspCallThreadNotificationRoutines(eThread, TRUE);
@@ -377,7 +403,11 @@ XBSYSAPI EXPORTNUM(255) xbox::ntstatus_xt NTAPI xbox::PsCreateSystemThreadEx
 		// Create another handle to pass back to the title in the ThreadHandle argument
 		result = ObOpenObjectByPointer(eThread, &PsThreadObjectType, ThreadHandle);
 		if (!X_NT_SUCCESS(result)) {
-			ObpClose(eThread->UniqueThread);
+			// Undo KeInitializeThread's thread list insertion and free the kernel stack
+			// while the UniqueThread handle still holds a reference to eThread.
+			PspRemoveThreadFromProcess(eThread);
+			MmDeleteKernelStack(eThread->Tcb.StackBase, eThread->Tcb.StackLimit);
+			ObpClose(eThread->UniqueThread); // Drops last ref, frees eThread
 			RETURN(result);
 		}
 
@@ -394,8 +424,12 @@ XBSYSAPI EXPORTNUM(255) xbox::ntstatus_xt NTAPI xbox::PsCreateSystemThreadEx
 		HANDLE handle = reinterpret_cast<HANDLE>(_beginthreadex(NULL, hKernelStackSize, PCSTProxy, iPCSTProxyParam, CREATE_SUSPENDED, &ThreadId));
 		if (handle == zeroptr) {
 			delete iPCSTProxyParam;
+			// Undo KeInitializeThread's thread list insertion and free the kernel stack
+			// while handles still hold references to eThread.
+			PspRemoveThreadFromProcess(eThread);
+			MmDeleteKernelStack(eThread->Tcb.StackBase, eThread->Tcb.StackLimit);
 			ObpClose(*ThreadHandle);
-			ObpClose(eThread->UniqueThread);
+			ObpClose(eThread->UniqueThread); // Drops last ref, frees eThread
 			RETURN(X_STATUS_INSUFFICIENT_RESOURCES);
 		}
 
@@ -525,22 +559,25 @@ XBSYSAPI EXPORTNUM(258) xbox::void_xt NTAPI xbox::PsTerminateSystemThread
 		eThread->UniqueThread = xbox::zeroptr;
 	}
 
+	// Clean up the host wake event before the reaper can free our ETHREAD
+	CxbxUnregisterThreadWakeEvent(&eThread->Tcb);
+
 	// Remove thread from the process (synchronized with KeInitializeThread's insertion)
 	{
 		KIRQL OldIrql = KeRaiseIrqlToDpcLevel();
 		RemoveEntryList(&eThread->Tcb.ThreadListEntry);
 		eThread->Tcb.State = Terminated;
 		KiUniqueProcess.StackCount--;
-		InsertTailList(&PspReaperListHead, &((PETHREAD)eThread)->ReaperLink);
+		{
+			std::unique_lock lck(g_ReaperListMtx);
+			InsertTailList(&PspReaperListHead, &((PETHREAD)eThread)->ReaperLink);
+		}
 		KfLowerIrql(OldIrql);
 	}
 
 	// PspReaperRoutine technically free'd the memory allocation from MmCreateKernelStack function.
 	// Therefore is run from another thread.
 	KeInsertQueueDpc(&PsReaperDpc, NULL, NULL);
-
-	// Clean up the host wake event before freeing the KPCR
-	CxbxUnregisterThreadWakeEvent(&eThread->Tcb);
 
 	EmuKeFreePcr();
 

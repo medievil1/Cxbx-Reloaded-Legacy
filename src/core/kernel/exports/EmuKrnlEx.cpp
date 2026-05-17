@@ -14,7 +14,7 @@
 // *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
 // *  GNU General Public License for more details.
 // *
-// *  You should have recieved a copy of the GNU General Public License
+// *  You should have received a copy of the GNU General Public License
 // *  along with this program; see the file COPYING.
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
@@ -183,7 +183,6 @@ XBSYSAPI EXPORTNUM(13) xbox::void_xt NTAPI xbox::ExAcquireReadWriteLockShared
 	if (InterlockedIncrement(reinterpret_cast<LONG*>(&ReadWriteLock->LockCount)) != 0 && must_wait) {
 		ReadWriteLock->ReadersWaitingCount++;
 		RestoreInterruptMode(interrupt_mode);
-#if 0 //FIXME - Enable once KeReleaseSempahore is implemented (used in ExFreeReadWriteLock for Sharedlocks).
 		KeWaitForSingleObject(
 			&ReadWriteLock->ReaderSemaphore,
 			Executive,
@@ -191,7 +190,6 @@ XBSYSAPI EXPORTNUM(13) xbox::void_xt NTAPI xbox::ExAcquireReadWriteLockShared
 			0,
 			0
 		);
-#endif
 	}
 	else {
 		ReadWriteLock->ReadersEntryCount++;
@@ -298,19 +296,9 @@ XBSYSAPI EXPORTNUM(19) xbox::LARGE_INTEGER NTAPI xbox::ExInterlockedAddLargeInte
 		LOG_FUNC_END;
 
 	LARGE_INTEGER OldValue;
-// TODO :	BOOLEAN Enable;
 
-	/* Disable interrupts and acquire the spinlock */
-// TODO :	Enable = _ExiDisableInterruptsAndAcquireSpinlock(Lock);
-
-	/* Save the old value */
-	OldValue.QuadPart = Addend->QuadPart;
-
-	/* Do the operation */
-	Addend->QuadPart += Increment.QuadPart;
-
-	/* Release the spinlock and restore interrupts */
-	// TODO :	_ExiReleaseSpinLockAndRestoreInterrupts(Lock, Enable);
+	/* Atomically add and return the old value (replaces spinlock-based implementation) */
+	OldValue.QuadPart = reinterpret_cast<std::atomic<LONGLONG>*>(&Addend->QuadPart)->fetch_add(Increment.QuadPart, std::memory_order_seq_cst);
 
 	/* Return the old value */
 	return OldValue; // TODO : operator<<(LARGE_INTERGER) enables RETURN(OldValue);
@@ -408,8 +396,8 @@ XBSYSAPI EXPORTNUM(24) xbox::ntstatus_xt NTAPI xbox::ExQueryNonVolatileSetting
 
 	NTSTATUS Status = X_STATUS_SUCCESS;
 	void * value_addr = nullptr;
-	int value_type;
-	int result_length;
+	int value_type = 0;
+	int result_length = 0;
 	xbox::XC_VALUE_INDEX index = (XC_VALUE_INDEX)ValueIndex;
 
 	// handle eeprom read
@@ -645,7 +633,7 @@ XBSYSAPI EXPORTNUM(29) xbox::ntstatus_xt NTAPI xbox::ExSaveNonVolatileSetting
 
 	NTSTATUS Status = X_STATUS_SUCCESS;
 	void * value_addr = nullptr;
-	DWORD result_length;
+	DWORD result_length = 0;
 
 	// Don't allow writing to the eeprom encrypted area
 	if (ValueIndex == XC_ENCRYPTED_SECTION)
