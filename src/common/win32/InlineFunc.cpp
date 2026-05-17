@@ -82,18 +82,28 @@ std::optional<std::string> CxbxrExec(bool useDebugger, void** hProcess, bool req
 	// killed via Task Manager).  This is necessary because the render window
 	// uses WS_POPUP (owned) instead of WS_CHILD, so Windows no longer
 	// auto-destroys it when the parent window/process goes away.
+	//
+	// Skip job creation when we are already inside a Job Object (i.e. when
+	// the emulation process calls CxbxrExec for an XBE reboot/reload).  In
+	// that case the new child inherits the grandparent's job automatically,
+	// so orphan-kill behaviour is preserved.  Creating a second job here
+	// would kill the new process when *this* process exits its job handle.
 	{
-		static HANDLE s_hJob = NULL;
-		if (!s_hJob) {
-			s_hJob = CreateJobObject(NULL, NULL);
-			if (s_hJob) {
-				JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
-				jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
-				SetInformationJobObject(s_hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+		BOOL alreadyInJob = FALSE;
+		IsProcessInJob(GetCurrentProcess(), NULL, &alreadyInJob);
+		if (!alreadyInJob) {
+			static HANDLE s_hJob = NULL;
+			if (!s_hJob) {
+				s_hJob = CreateJobObject(NULL, NULL);
+				if (s_hJob) {
+					JOBOBJECT_EXTENDED_LIMIT_INFORMATION jeli = {};
+					jeli.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+					SetInformationJobObject(s_hJob, JobObjectExtendedLimitInformation, &jeli, sizeof(jeli));
+				}
 			}
-		}
-		if (s_hJob) {
-			AssignProcessToJobObject(s_hJob, processInfo.hProcess);
+			if (s_hJob) {
+				AssignProcessToJobObject(s_hJob, processInfo.hProcess);
+			}
 		}
 	}
 
