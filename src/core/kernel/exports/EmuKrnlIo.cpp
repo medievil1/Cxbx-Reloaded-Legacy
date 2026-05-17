@@ -1300,12 +1300,15 @@ xbox::ntstatus_xt IopQueryDeviceInformation
 	ntstatus_xt result;
 	const auto& nhandle = GetObjectNativeHandle(FileObject);
 	if (nhandle) {
-		// Determine the native buffer size needed for this information class.
-		size_t bufferSize = (FileInformationClass >= 0 &&
-		                     FileInformationClass <= FileMaximumInformation &&
-		                     IopQueryOperationLength[FileInformationClass] != 0)
-		                    ? IopQueryOperationLength[FileInformationClass]
-		                    : Length;
+		// Reject unknown or sentinel information classes.
+		if (FileInformationClass <= 0 ||
+		    FileInformationClass >= FileMaximumInformation ||
+		    IopQueryOperationLength[FileInformationClass] == 0) {
+			ObfDereferenceObject(FileObject);
+			return X_STATUS_INVALID_INFO_CLASS;
+		}
+
+		size_t bufferSize = IopQueryOperationLength[FileInformationClass];
 
 		PVOID ntFileInfo = malloc(bufferSize);
 		if (ntFileInfo == nullptr) {
@@ -1324,7 +1327,7 @@ xbox::ntstatus_xt IopQueryDeviceInformation
 		if (X_NT_SUCCESS(result)) {
 			NTToXboxFileInformation(ntFileInfo, FileInformation, FileInformationClass, Length);
 			if (ReturnedLength != nullptr) {
-				*ReturnedLength = (ULONG)bufferSize;
+				*ReturnedLength = (ULONG)ioStatusBlock.Information;
 			}
 		} else {
 			EmuLog(LOG_LEVEL::WARNING, "NtQueryInformationFile failed! (0x%.08X)", result);
