@@ -26,6 +26,11 @@
 // ******************************************************************
 #include "Mutex.h"
 
+// Number of 1ms Sleep() iterations after which we check whether the process
+// that owns the mutex cross-process is still alive.  At 1ms per iteration this
+// is approximately 100ms.
+static constexpr unsigned int DEAD_PROCESS_CHECK_INTERVAL = 100;
+
 // ******************************************************************
 // * Constructor
 // ******************************************************************
@@ -82,15 +87,22 @@ void Mutex::Lock()
             // A process that crashed or was force-terminated (e.g. via
             // TerminateProcess) may never call Unlock(), leaving the mutex
             // permanently abandoned.  Detect this and forcibly reclaim it.
-            if (m_OwnerProcess != _CurrentProcessId && ++stallCount >= 100)
+            if (m_OwnerProcess != _CurrentProcessId && ++stallCount >= DEAD_PROCESS_CHECK_INTERVAL)
             {
                 stallCount = 0;
                 LONG ownerPID = m_OwnerProcess;
                 HANDLE hOwner = OpenProcess(SYNCHRONIZE, FALSE, (DWORD)ownerPID);
-                bool ownerDead = (hOwner == NULL) ||
-                                 (WaitForSingleObject(hOwner, 0) == WAIT_OBJECT_0);
-                if (hOwner != NULL)
+                bool ownerDead;
+                if (hOwner == NULL) {
+                    // OpenProcess returned NULL: the process does not exist or we
+                    // do not have access rights to it — treat it as gone.
+                    ownerDead = true;
+                } else {
+                    // A non-NULL handle was returned.  Poll with a zero timeout:
+                    // WAIT_OBJECT_0 means the process has already terminated.
+                    ownerDead = (WaitForSingleObject(hOwner, 0) == WAIT_OBJECT_0);
                     CloseHandle(hOwner);
+                }
                 if (ownerDead)
                 {
                     // Owner process is gone; forcibly reset the mutex so any
