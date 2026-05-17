@@ -43,6 +43,7 @@ namespace NtDll
 #include "core\hle\D3D8\Rendering\Backend\Backend_D3D11_PageTracker.h"
 #include "core\hle\D3D8\Rendering\RenderGlobals.h"
 #include "core\hle\D3D8\Rendering\Backend\Backend_D3D11.h" // For g_pD3DDeviceContext
+#include "EmuShared.h" // For g_EmuShared
 #include "core\hle\D3D8\XbConvert.h" // For EmuXBFormatBytesPerPixel
 #include "devices\x86\EmuX86.h"
 
