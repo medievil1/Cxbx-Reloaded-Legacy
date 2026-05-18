@@ -273,25 +273,11 @@ class EmuShared : public Mutex
 		void ClearSavedWindowState() { Lock(); m_bSavedWindowStateValid = false; Unlock(); }
 
 		// ******************************************************************
-		// * Captured frame Accessors (for splash-screen replacement during reboot)
+		// * Render-window HWND (GUI-owned WS_CHILD window that persists across emu cycles)
 		// ******************************************************************
-		void GetCapturedFrameValid(bool *valid) { Lock(); *valid = m_bCapturedFrameValid; Unlock(); }
-		void GetCapturedFrameMeta(uint32_t *w, uint32_t *h, uint32_t *pitch, uint32_t *bpp, uint32_t *sz)
-		{
-			Lock();
-			*w = m_CapturedFrameWidth; *h = m_CapturedFrameHeight;
-			*pitch = m_CapturedFramePitch; *bpp = m_CapturedFrameBpp; *sz = m_CapturedFrameSize;
-			Unlock();
-		}
-		void SetCapturedFrameMeta(uint32_t w, uint32_t h, uint32_t pitch, uint32_t bpp, uint32_t sz)
-		{
-			Lock();
-			m_CapturedFrameWidth = w; m_CapturedFrameHeight = h;
-			m_CapturedFramePitch = pitch; m_CapturedFrameBpp = bpp; m_CapturedFrameSize = sz;
-			m_bCapturedFrameValid = true;
-			Unlock();
-		}
-		void ClearCapturedFrameMeta() { Lock(); m_bCapturedFrameValid = false; Unlock(); }
+		void SetRenderHwnd(uint64_t hwnd) { Lock(); m_RenderHwnd = hwnd; Unlock(); }
+		void GetRenderHwnd(uint64_t *hwnd) { Lock(); *hwnd = m_RenderHwnd; Unlock(); }
+		void ClearRenderHwnd() { Lock(); m_RenderHwnd = 0; Unlock(); }
 
 		// ******************************************************************
 		// * ClipCursor flag Accessors
@@ -440,13 +426,8 @@ class EmuShared : public Mutex
 		bool         m_bSavedFauxFullscreen;
 		bool         m_bSavedWindowStateValid;
 
-		// Captured frame metadata (for splash-screen replacement during quick reboot)
-		uint32_t     m_CapturedFrameWidth;
-		uint32_t     m_CapturedFrameHeight;
-		uint32_t     m_CapturedFramePitch;
-		uint32_t     m_CapturedFrameBpp;    // bytes per pixel
-		uint32_t     m_CapturedFrameSize;   // total bytes in the frame section
-		bool         m_bCapturedFrameValid;
+		// GUI-owned render window HWND (persists across emu process cycles)
+		uint64_t     m_RenderHwnd;
 };
 
 // ******************************************************************

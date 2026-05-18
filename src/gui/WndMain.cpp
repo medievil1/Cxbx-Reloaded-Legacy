@@ -214,7 +214,9 @@ WndMain::WndMain(HINSTANCE x_hInstance) :
 	, m_hDebuggerMonitorThread()
 	, m_prevWindowLoc({ -1, -1 })
 	, m_LogKrnl_status(false)
-	, m_hCapturedFrameSection(NULL)
+	, m_hwndRender(nullptr)
+	, m_bCreatingRenderChild(false)
+	, m_bDestroyingRenderChild(false)
 {
 	// initialize members
 	{
@@ -348,22 +350,25 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 			{
 				case WM_CREATE:
 				{
-					if (m_hwndChild == NULL) {
-						m_hwndChild = GetWindow(hwnd, GW_CHILD);
-						UpdateCaption();
-						RefreshMenus();
-					}
-					else {
-						m_hwndChild = GetWindow(hwnd, GW_CHILD);
+					// Ignore our own render child window being created.
+					if (!m_bCreatingRenderChild) {
+						if (m_hwndChild == NULL) {
+							m_hwndChild = GetWindow(hwnd, GW_CHILD);
+							UpdateCaption();
+							RefreshMenus();
+						}
+						else {
+							m_hwndChild = GetWindow(hwnd, GW_CHILD);
+						}
 					}
 				}
 				break;
 
 				case WM_DESTROY:
 				{
-					// (HWND)HIWORD(wParam) seems to be NULL, so we can't compare to m_hwndChild
-					// We can't check m_hwndChild for nonzero as we may accidentally think reboot did not occur.
-					if (!m_iIsEmulating) {
+					// Guard against our own render child being destroyed to prevent
+					// re-entering StopEmulation recursively.
+					if (!m_bDestroyingRenderChild && !m_iIsEmulating) {
 						m_hwndChild = NULL;
 						StopEmulation();
 					}
@@ -410,7 +415,8 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							break;
 
 						case ID_GUI_STATUS_EMU_HWND:
-							// The emu process sends its render window HWND (WS_POPUP owned window).
+							// The emu process sends its hidden IPC window HWND (GUI embedded mode)
+							// or render window HWND (standalone mode).
 							m_hwndChild = (HWND)(uintptr_t)lParam;
 							UpdateCaption();
 							RefreshMenus();
@@ -420,14 +426,8 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							if (!m_iIsEmulating) {
 								m_hwndChild = NULL;
 								StopEmulation();
-							} else {
-								// During a quick reboot the emu popup is gone but the GUI
-								// window may not receive a natural WM_PAINT (WS_POPUP does
-								// not always invalidate the parent the way WS_CHILD does).
-								// Force a repaint now so the captured frame is shown.
-								InvalidateRect(m_hwnd, NULL, FALSE);
-								UpdateWindow(m_hwnd);
 							}
+							// During reboot: m_hwndRender stays alive so no repaint needed.
 							break;
 					}
 				}
@@ -505,51 +505,13 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
                 bkRect.bottom -= nLogoBmpH + 10;
 
-                // During a quick reboot (emu process cycling), show the last captured
-                // frame in the main window area instead of the Cxbx splash screen.
-                // NOTE: m_hwndChild is intentionally NOT checked here.  During reboot
-                // it is never nullptr (the code that nulls it guards with !m_iIsEmulating),
-                // so the only reliable gate is m_bIsStarted + a valid captured frame.
-                bool bDrewCapturedFrame = false;
-                if (m_bIsStarted && m_hCapturedFrameSection != nullptr) {
-                    bool captureValid = false;
-                    g_EmuShared->GetCapturedFrameValid(&captureValid);
-                    if (captureValid) {
-                        uint32_t fw, fh, fpitch, fbpp, fsz;
-                        g_EmuShared->GetCapturedFrameMeta(&fw, &fh, &fpitch, &fbpp, &fsz);
-                        // Only handle 32-bit BGRA (the most common Xbox display format)
-                        if (fbpp == 4 && fw > 0 && fh > 0 && fsz > 0 && fsz <= (4 * 1024 * 1024)) {
-                            const void* pFrameData = MapViewOfFile(m_hCapturedFrameSection, FILE_MAP_READ, 0, 0, fsz);
-                            if (pFrameData != nullptr) {
-                                BITMAPINFO bmi = {};
-                                bmi.bmiHeader.biSize        = sizeof(BITMAPINFOHEADER);
-                                bmi.bmiHeader.biWidth       = (LONG)fw;
-                                bmi.bmiHeader.biHeight      = -(LONG)fh; // top-down
-                                bmi.bmiHeader.biPlanes      = 1;
-                                bmi.bmiHeader.biBitCount    = 32;
-                                bmi.bmiHeader.biCompression = BI_RGB;
-                                // Stretch to the full content area (above the status bar).
-                                // bkRect is the partial dirty rect from ps.rcPaint which
-                                // can be smaller than the window; using it as the destination
-                                // would produce a squished/partial image.
-                                StretchDIBits(hDC,
-                                    0, 0, m_w, m_h - nLogoBmpH - 10,
-                                    0, 0, (int)fw, (int)fh,
-                                    pFrameData, &bmi, DIB_RGB_COLORS, SRCCOPY);
-                                UnmapViewOfFile(pFrameData);
-                                bDrewCapturedFrame = true;
-                            }
-                        }
-                    }
-                }
-
-                if (!bDrewCapturedFrame) {
-                    FillRect(hDC, &bkRect, m_BackgroundColor);
+                // The render child window (m_hwndRender) covers the content area during
+                // emulation, so the splash is only visible when not emulating.
+                FillRect(hDC, &bkRect, m_BackgroundColor);
 
                     BitBlt(hDC, m_w/2 - splashLogoWidth/2, m_h/2 - splashLogoHeight, splashLogoWidth, splashLogoHeight, m_SplashDC, 0, 0, SRCCOPY);
 
                     BitBlt(hDC, m_w - gameLogoWidth - 3, m_h - nLogoBmpH - 12 - gameLogoHeight, gameLogoWidth, gameLogoHeight, m_GameLogoDC, 0, 0, SRCCOPY);
-                }
 
                 bkRect.top = bkRect.bottom;
                 bkRect.bottom += nLogoBmpH + 10;
@@ -2400,16 +2362,31 @@ void WndMain::StartEmulation(HWND hwndParent, DebuggerState LocalDebuggerState /
 	SetTimer(m_hwnd, TIMERID_ACTIVE_EMULATION, 1000, (TIMERPROC)nullptr);
 	SetTimer(m_hwnd, TIMERID_LED, XBOX_LED_FLASH_PERIOD, (TIMERPROC)nullptr);
 
-	// Create the named shared section that the emu process will write the captured
-	// frame into before quick reboot. Held open here so the data survives process exit.
+	// Create the persistent WS_CHILD render window covering the GUI client area.
+	// This window lives in the GUI process and is shared with the emu process via
+	// EmuShared::SetRenderHwnd, allowing D3D11 to render into it without tearing
+	// it down between emu process cycles (reboots).
 	{
-		if (m_hCapturedFrameSection != NULL) {
-			CloseHandle(m_hCapturedFrameSection);
+		if (m_hwndRender == nullptr) {
+			static bool sClassRegistered = false;
+			if (!sClassRegistered) {
+				WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, DefWindowProc, 0, 0,
+					m_hInstance, nullptr, nullptr,
+					(HBRUSH)GetStockObject(BLACK_BRUSH),
+					nullptr, "CxbxEmuRender", nullptr };
+				RegisterClassEx(&wc);
+				sClassRegistered = true;
+			}
+			RECT clientRect;
+			GetClientRect(m_hwnd, &clientRect);
+			m_bCreatingRenderChild = true;
+			m_hwndRender = CreateWindow("CxbxEmuRender", "",
+				WS_CHILD | WS_VISIBLE,
+				0, 0, clientRect.right, clientRect.bottom,
+				m_hwnd, nullptr, m_hInstance, nullptr);
+			m_bCreatingRenderChild = false;
+			g_EmuShared->SetRenderHwnd((uint64_t)(uintptr_t)m_hwndRender);
 		}
-		constexpr DWORD kMaxFrameSize = 4 * 1024 * 1024;
-		std::string sectionName = "Local\\CxbxCapFrame-" + std::to_string(cli_config::GetSessionID());
-		m_hCapturedFrameSection = CreateFileMapping(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
-			0, kMaxFrameSize, sectionName.c_str());
 	}
 
 	// shell exe
@@ -2508,11 +2485,14 @@ void WndMain::StopEmulation()
 
 	g_EmuShared->SetIsEmulating(false);
 
-	if (m_hCapturedFrameSection != NULL) {
-		CloseHandle(m_hCapturedFrameSection);
-		m_hCapturedFrameSection = NULL;
+	// Destroy the persistent render child window now that emulation has fully stopped.
+	if (m_hwndRender != nullptr) {
+		g_EmuShared->ClearRenderHwnd();
+		m_bDestroyingRenderChild = true;
+		DestroyWindow(m_hwndRender);
+		m_bDestroyingRenderChild = false;
+		m_hwndRender = nullptr;
 	}
-	g_EmuShared->ClearCapturedFrameMeta();
 
 	DrawLedBitmap(m_hwnd, true);
 }

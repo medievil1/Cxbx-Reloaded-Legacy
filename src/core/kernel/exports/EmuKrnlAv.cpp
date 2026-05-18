@@ -51,7 +51,6 @@ namespace NtDll
 #include "devices\Xbox.h" // For g_NV2A
 #include "devices\video\nv2a_int.h"
 #include "devices\video\nv2a.h" // For NV2ABlockInfo, EmuNV2A_Block()
-#include "common\util\cliConfig.hpp"
 
 
 // HW Register helper functions
@@ -272,78 +271,6 @@ bool CxbxAvPersistCurrentDisplayState()
 	g_CxbxAvSavedDisplayState = current;
 	xbox::AvSavedDataAddress = reinterpret_cast<xbox::PVOID>(current.FrameBuffer);
 
-	// Share captured frame pixels with the GUI process so it can replace the splash
-	// screen with the last rendered frame while the new XBE process is starting up.
-	{
-		constexpr DWORD kMaxFrameSize = 4 * 1024 * 1024;
-		DWORD bpp = EmuXBFormatBytesPerPixel(static_cast<xbox::X_D3DFORMAT>(current.Format));
-		EmuLog(LOG_LEVEL::INFO, "CxbxAvPersistCurrentDisplayState: w=%u h=%u pitch=%u bpp=%u sz=%u fmt=%u fb=0x%x",
-			current.Width, current.Height, current.Pitch, bpp, current.SurfaceSize, current.Format, current.FrameBuffer);
-		if (bpp > 0 && current.SurfaceSize > 0 && current.SurfaceSize <= kMaxFrameSize) {
-			// --- Debug: save the raw frame as a BMP for visual verification ---
-			{
-				char bmpPath[MAX_PATH] = {};
-				GetModuleFileNameA(NULL, bmpPath, MAX_PATH);
-				char* pSlash = strrchr(bmpPath, '\\');
-			if (pSlash) {
-					strcpy_s(pSlash + 1, sizeof(bmpPath) - (pSlash + 1 - bmpPath), "cap_frame.bmp");
-				} else {
-					strcpy_s(bmpPath, MAX_PATH, "cap_frame.bmp");
-				}
-				const uint8_t* pSrc = reinterpret_cast<const uint8_t*>(CONTIGUOUS_MEMORY_BASE + current.FrameBuffer);
-				FILE* f = nullptr;
-				if (fopen_s(&f, bmpPath, "wb") == 0 && f) {
-					DWORD rowBytes = current.Width * bpp;
-					DWORD paddedRow = (rowBytes + 3) & ~3u;
-					DWORD pixDataSize = paddedRow * current.Height;
-					BITMAPFILEHEADER bfh = {};
-					bfh.bfType = 0x4D42; // 'BM'
-					bfh.bfSize = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER) + pixDataSize;
-					bfh.bfOffBits = sizeof(BITMAPFILEHEADER) + sizeof(BITMAPINFOHEADER);
-					BITMAPINFOHEADER bih = {};
-					bih.biSize = sizeof(BITMAPINFOHEADER);
-					bih.biWidth = (LONG)current.Width;
-					bih.biHeight = -(LONG)current.Height; // negative = top-down
-					bih.biPlanes = 1;
-					bih.biBitCount = (WORD)(bpp * 8);
-					bih.biCompression = BI_RGB;
-					bih.biSizeImage = pixDataSize;
-					fwrite(&bfh, sizeof(bfh), 1, f);
-					fwrite(&bih, sizeof(bih), 1, f);
-					static const uint8_t kPad[3] = {};
-					for (DWORD row = 0; row < current.Height; row++) {
-						fwrite(pSrc + (size_t)row * current.Pitch, rowBytes, 1, f);
-						if (paddedRow > rowBytes) {
-							fwrite(kPad, paddedRow - rowBytes, 1, f);
-						}
-					}
-					fclose(f);
-					EmuLog(LOG_LEVEL::INFO, "CxbxAvPersistCurrentDisplayState: saved debug BMP to %s", bmpPath);
-				} else {
-					EmuLog(LOG_LEVEL::WARNING, "CxbxAvPersistCurrentDisplayState: failed to open %s for BMP save", bmpPath);
-				}
-			}
-			// --- End debug BMP ---
-			std::string sectionName = "Local\\CxbxCapFrame-" + std::to_string(cli_config::GetSessionID());
-			HANDLE hSection = OpenFileMapping(FILE_MAP_WRITE, FALSE, sectionName.c_str());
-			EmuLog(LOG_LEVEL::INFO, "CxbxAvPersistCurrentDisplayState: OpenFileMapping('%s') = %p", sectionName.c_str(), hSection);
-			if (hSection != nullptr) {
-				void* pData = MapViewOfFile(hSection, FILE_MAP_WRITE, 0, 0, current.SurfaceSize);
-				EmuLog(LOG_LEVEL::INFO, "CxbxAvPersistCurrentDisplayState: MapViewOfFile sz=%u = %p", current.SurfaceSize, pData);
-				if (pData != nullptr) {
-					// current.FrameBuffer is a physical offset into NV2A VRAM (0..64MB).
-					// After CxbxPageTrackerFlushGPUDirtyToMirror the D3D11 RT data has
-					// been copied to host VA = CONTIGUOUS_MEMORY_BASE + offset.
-					memcpy(pData, reinterpret_cast<const void*>(CONTIGUOUS_MEMORY_BASE + current.FrameBuffer), current.SurfaceSize);
-					UnmapViewOfFile(pData);
-					// Only mark the capture valid when we actually wrote the pixels.
-					g_EmuShared->SetCapturedFrameMeta(current.Width, current.Height, current.Pitch, bpp, current.SurfaceSize);
-					EmuLog(LOG_LEVEL::INFO, "CxbxAvPersistCurrentDisplayState: capture written, captureValid=true");
-				}
-				CloseHandle(hSection);
-			}
-		}
-	}
 	return true;
 }
 

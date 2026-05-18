@@ -177,7 +177,12 @@ class WndMain : public Wnd
 		HPEN        m_Pens[4];
 		int         m_xBmp, m_yBmp;
         HBRUSH      m_BackgroundColor;
-        HANDLE      m_hCapturedFrameSection;
+
+        // GUI-owned WS_CHILD render window that persists across emu process cycles.
+        // Created in StartEmulation, destroyed in StopEmulation.
+        HWND        m_hwndRender;
+        bool        m_bCreatingRenderChild;   // suppresses WM_PARENTNOTIFY during CreateWindow(m_hwndRender)
+        bool        m_bDestroyingRenderChild; // suppresses WM_PARENTNOTIFY during DestroyWindow(m_hwndRender)
 
         // ******************************************************************
         // * Xbe objects

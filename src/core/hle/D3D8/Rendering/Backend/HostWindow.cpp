@@ -28,7 +28,9 @@
 void RunOnWndMsgThread(const std::function<void()>& func)
 {
 	const void* param = &func;
-	SendMessage(g_hEmuWindow, WM_CXBXR_RUN_ON_MESSAGE_THREAD, reinterpret_cast<WPARAM>(param), 0);
+	// In GUI embedded mode, dispatch to the hidden IPC window; in standalone mode to the render window.
+	HWND target = (g_hEmuMsgWindow != NULL) ? g_hEmuMsgWindow : g_hEmuWindow;
+	SendMessage(target, WM_CXBXR_RUN_ON_MESSAGE_THREAD, reinterpret_cast<WPARAM>(param), 0);
 }
 
 
@@ -87,7 +89,10 @@ void CxbxInitWindow()
 		CloseHandle(hRenderWindowThread);
    	}
 
-	SetFocus(g_hEmuWindow);
+	// In GUI embedded mode, SetFocus across process boundaries is not permitted.
+	if (CxbxKrnl_hEmuParent == NULL) {
+		SetFocus(g_hEmuWindow);
+	}
 	g_renderbase = std::unique_ptr<RenderBase>(new RenderBase());
 	g_renderbase->Initialize();
 

@@ -166,12 +166,7 @@ EmuShared::EmuShared()
 		i = to_underlying(XBOX_INPUT_DEVICE::DEVICE_INVALID);
 	}
     std::strncpy(m_git_version, GetGitVersionStr(), GetGitVersionLength());
-	m_bCapturedFrameValid = false;
-	m_CapturedFrameWidth = 0;
-	m_CapturedFrameHeight = 0;
-	m_CapturedFramePitch = 0;
-	m_CapturedFrameBpp = 0;
-	m_CapturedFrameSize = 0;
+	m_RenderHwnd = 0;
 }
 
 // ******************************************************************
