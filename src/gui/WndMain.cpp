@@ -691,8 +691,14 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 				const CxbxLastFrameHeader* hdr =
 					reinterpret_cast<const CxbxLastFrameHeader*>(cds->lpData);
 
-				// Validate that the payload contains at least as many pixel bytes as declared.
-				const DWORD pixelBytes = hdr->Pitch * hdr->Height;
+				// Validate Pitch/Height before multiplying to avoid DWORD overflow.
+				// A typical Xbox framebuffer is at most 1280 * 1024 * 4 bytes (~5 MB).
+				static constexpr DWORD kMaxFrameBytes = 6 * 1024 * 1024;
+				const bool pitchHeightSafe =
+					hdr->Pitch > 0 && hdr->Height > 0 &&
+					hdr->Pitch <= kMaxFrameBytes / hdr->Height;
+				const DWORD pixelBytes = pitchHeightSafe ? (hdr->Pitch * hdr->Height) : 0;
+
 				if (pixelBytes > 0 && cds->cbData >= sizeof(CxbxLastFrameHeader) + pixelBytes) {
 					// Build BITMAPINFO for the Xbox pixel format so StretchDIBits can
 					// decode the raw bytes into a compatible device bitmap.
@@ -700,6 +706,11 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 						BITMAPINFOHEADER bmiH;
 						DWORD            masks[3]; // only used for BI_BITFIELDS (R5G6B5)
 					} bmi = {};
+
+					// Named bit-mask constants for R5G6B5
+					static constexpr DWORD kR5G6B5_RedMask   = 0xF800;
+					static constexpr DWORD kR5G6B5_GreenMask = 0x07E0;
+					static constexpr DWORD kR5G6B5_BlueMask  = 0x001F;
 
 					WORD  bitCount    = 32;
 					DWORD compression = BI_RGB;
@@ -711,9 +722,9 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 						break;
 					case xbox::X_D3DFMT_LIN_R5G6B5:
 						bitCount = 16; compression = BI_BITFIELDS;
-						bmi.masks[0] = 0xF800; // R mask
-						bmi.masks[1] = 0x07E0; // G mask
-						bmi.masks[2] = 0x001F; // B mask
+						bmi.masks[0] = kR5G6B5_RedMask;
+						bmi.masks[1] = kR5G6B5_GreenMask;
+						bmi.masks[2] = kR5G6B5_BlueMask;
 						break;
 					case xbox::X_D3DFMT_LIN_A1R5G5B5:
 					case xbox::X_D3DFMT_LIN_X1R5G5B5:
@@ -721,6 +732,8 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 						break;
 					default:
 						bitCount = 0; // unsupported format; skip
+						EmuLog(LOG_LEVEL::WARNING, "CxbxLastFrame: unsupported Xbox display format 0x%X; "
+						       "splash may briefly appear on reboot.", hdr->Format);
 						break;
 					}
 

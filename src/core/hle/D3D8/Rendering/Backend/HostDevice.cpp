@@ -61,7 +61,8 @@ void CxbxSendLastFrameToParent()
 	if (!CxbxAvGetSavedDisplayState(&savedDisplay))
 		return;
 
-	if (!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer) ||
+	if (savedDisplay.SurfaceSize == 0 ||
+		!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer) ||
 		!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer + savedDisplay.SurfaceSize - 1))
 		return;
 
