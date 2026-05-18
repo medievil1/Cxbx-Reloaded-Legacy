@@ -23,12 +23,147 @@
 // *
 // ******************************************************************
 #include "../EmuD3D8_common.h"
+#include "common/win32/PersistDisplay.h"
 
 // Variables only used in HostDevice.cpp
 static HBRUSH g_hBgBrush = NULL; // Background Brush
 static bool g_bIsFauxFullscreen = false;
 static int g_iWireframe = 0; // wireframe toggle
 static HWINEVENTHOOK g_parentEventHook = NULL; // WinEvent hook for tracking parent window moves
+static bool g_bPersistDisplayPaintPending = false;
+static ComPtr<ID3D11Texture2D> g_pPersistDisplayCaptureTexture;
+static ComPtr<ID3D11Texture2D> g_pPersistDisplayStagingTexture;
+static UINT g_PersistDisplayCaptureWidth = 0;
+static UINT g_PersistDisplayCaptureHeight = 0;
+
+static RECT BuildPersistDisplayDestRect()
+{
+	RECT dest = {};
+
+	float width;
+	float height;
+	if (g_XBVideo.bMaintainAspect && g_AspectRatioScaleWidth > 0 && g_AspectRatioScaleHeight > 0) {
+		width = g_AspectRatioScaleWidth * g_AspectRatioScale;
+		height = g_AspectRatioScaleHeight * g_AspectRatioScale;
+	}
+	else {
+		width = static_cast<float>(g_HostBackBufferDesc.Width);
+		height = static_cast<float>(g_HostBackBufferDesc.Height);
+	}
+
+	dest.top = static_cast<LONG>((g_HostBackBufferDesc.Height - height) / 2.0f);
+	dest.left = static_cast<LONG>((g_HostBackBufferDesc.Width - width) / 2.0f);
+	dest.right = static_cast<LONG>(dest.left + width);
+	dest.bottom = static_cast<LONG>(dest.top + height);
+	return dest;
+}
+
+static bool EnsurePersistDisplayCaptureTextures(UINT width, UINT height)
+{
+	if (width == 0 || height == 0 || g_pD3DDevice == nullptr) {
+		return false;
+	}
+
+	if (g_pPersistDisplayCaptureTexture && g_pPersistDisplayStagingTexture
+		&& g_PersistDisplayCaptureWidth == width
+		&& g_PersistDisplayCaptureHeight == height) {
+		return true;
+	}
+
+	g_pPersistDisplayCaptureTexture.Reset();
+	g_pPersistDisplayStagingTexture.Reset();
+
+	D3D11_TEXTURE2D_DESC captureDesc = {};
+	captureDesc.Width = width;
+	captureDesc.Height = height;
+	captureDesc.MipLevels = 1;
+	captureDesc.ArraySize = 1;
+	captureDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+	captureDesc.SampleDesc.Count = 1;
+	captureDesc.Usage = D3D11_USAGE_DEFAULT;
+	captureDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+
+	HRESULT hr = g_pD3DDevice->CreateTexture2D(&captureDesc, nullptr, g_pPersistDisplayCaptureTexture.GetAddressOf());
+	if (FAILED(hr)) {
+		return false;
+	}
+
+	captureDesc.Usage = D3D11_USAGE_STAGING;
+	captureDesc.BindFlags = 0;
+	captureDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+	hr = g_pD3DDevice->CreateTexture2D(&captureDesc, nullptr, g_pPersistDisplayStagingTexture.GetAddressOf());
+	if (FAILED(hr)) {
+		g_pPersistDisplayCaptureTexture.Reset();
+		return false;
+	}
+
+	g_PersistDisplayCaptureWidth = width;
+	g_PersistDisplayCaptureHeight = height;
+	return true;
+}
+
+bool CxbxPersistDisplayCaptureCurrentFrame()
+{
+	if (g_pD3DDevice == nullptr || g_pD3DDeviceContext == nullptr || g_HostBackBufferDesc.Width == 0 || g_HostBackBufferDesc.Height == 0) {
+		PersistDisplay::Clear();
+		return false;
+	}
+
+	NV2AState* d = g_NV2A ? g_NV2A->GetDeviceState() : nullptr;
+	if (d == nullptr) {
+		PersistDisplay::Clear();
+		return false;
+	}
+
+	ID3D11Texture2D* pXboxBackBufferHostSurface = nullptr;
+	if (d->pcrtc.start != 0) {
+		pXboxBackBufferHostSurface = CxbxLookupPgraphRTByOffset(d->pcrtc.start);
+	}
+	if (!pXboxBackBufferHostSurface) {
+		pXboxBackBufferHostSurface = g_pHostPgraphBackBuffer;
+	}
+	if (!pXboxBackBufferHostSurface) {
+		PersistDisplay::Clear();
+		return false;
+	}
+
+	if (!EnsurePersistDisplayCaptureTextures(g_HostBackBufferDesc.Width, g_HostBackBufferDesc.Height)) {
+		PersistDisplay::Clear();
+		return false;
+	}
+
+	bool stored = false;
+	RECT destRect = BuildPersistDisplayDestRect();
+
+	CxbxPageTrackerLockD3D11Context();
+	ID3D11Texture2D* pExistingRT = CxbxGetCurrentRenderTarget();
+	(void)CxbxSetRenderTarget(g_pPersistDisplayCaptureTexture.Get());
+	CxbxD3DClear(0, nullptr, D3DCLEAR_TARGET, 0xFF000000, 1.0f, 0);
+	(void)CxbxSetRenderTarget(pExistingRT);
+	(void)CxbxBltSurface(pXboxBackBufferHostSurface, nullptr, g_pPersistDisplayCaptureTexture.Get(), &destRect, D3DTEXF_LINEAR);
+	g_pD3DDeviceContext->CopyResource(g_pPersistDisplayStagingTexture.Get(), g_pPersistDisplayCaptureTexture.Get());
+
+	D3D11_MAPPED_SUBRESOURCE mapped = {};
+	if (SUCCEEDED(g_pD3DDeviceContext->Map(g_pPersistDisplayStagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped))) {
+		stored = PersistDisplay::StoreBgraFrame(mapped.pData, g_HostBackBufferDesc.Width, g_HostBackBufferDesc.Height, mapped.RowPitch);
+		g_pD3DDeviceContext->Unmap(g_pPersistDisplayStagingTexture.Get(), 0);
+	}
+	CxbxPageTrackerUnlockD3D11Context();
+
+	if (stored) {
+		g_bPersistDisplayPaintPending = true;
+	}
+	else {
+		PersistDisplay::Clear();
+	}
+
+	return stored;
+}
+
+void CxbxPersistDisplayOnPresent()
+{
+	g_bPersistDisplayPaintPending = false;
+}
 
 void CxbxSaveWindowStateForReboot()
 {
@@ -169,8 +304,8 @@ DWORD WINAPI EmuRenderWindow(LPVOID lpParam)
 			}
 		}
 
-   	   	g_hEmuWindow = CreateWindow
-   	   	(
+    	   	g_hEmuWindow = CreateWindow
+    	   	(
    	   	   	"CxbxRender", "Cxbx-Reloaded",
    	   	   	dwStyle, 
 			windowRect.left,
@@ -179,11 +314,13 @@ DWORD WINAPI EmuRenderWindow(LPVOID lpParam)
 			windowRect.bottom - windowRect.top,
    	   	   	hwndParent, nullptr, hActiveModule, // Was GetModuleHandle(nullptr),
    	   	   	nullptr
-   	   	);
-   	}
+    	   	);
+    	}
 
-   	ShowWindow(g_hEmuWindow, ((CxbxKrnl_hEmuParent == 0) || g_XBVideo.bFullScreen) ? SW_SHOWDEFAULT : SW_SHOW);
-   	UpdateWindow(g_hEmuWindow);
+	g_bPersistDisplayPaintPending = PersistDisplay::HasFrame();
+
+    	ShowWindow(g_hEmuWindow, ((CxbxKrnl_hEmuParent == 0) || g_XBVideo.bFullScreen) ? SW_SHOWDEFAULT : SW_SHOW);
+    	UpdateWindow(g_hEmuWindow);
 
 	// Restore window state from a previous reboot (secondary XBE load)
 	{
@@ -330,6 +467,15 @@ LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 			if (g_CxbxPrintUEM)
 			{
 				DrawUEM(hWnd);
+			}
+			else if (g_bPersistDisplayPaintPending)
+			{
+				PAINTSTRUCT ps;
+				BeginPaint(hWnd, &ps);
+				RECT clientRect;
+				GetClientRect(hWnd, &clientRect);
+				PersistDisplay::Paint(ps.hdc, clientRect);
+				EndPaint(hWnd, &ps);
 			}
 			else
 			{

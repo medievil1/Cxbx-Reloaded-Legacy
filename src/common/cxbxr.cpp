@@ -35,6 +35,7 @@ extern void CxbxrKrnlSuspendThreads();
 #include "cxbxr.hpp"
 
 #include "EmuShared.h"
+#include "win32/PersistDisplay.h"
 #include "Settings.hpp"
 #include "Logging.h"
 #include "win32/WineEnv.h"
@@ -133,6 +134,7 @@ bool HandleFirstLaunch()
 #endif
 
 	EmuShared::Cleanup();
+	PersistDisplay::Cleanup();
 
 	TerminateProcess(GetCurrentProcess(), 0);
 }

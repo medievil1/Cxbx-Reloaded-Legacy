@@ -34,6 +34,7 @@
 #include "core\kernel\init\CxbxKrnl.h"
 #include "core\kernel\support\Emu.h"
 #include "EmuShared.h"
+#include "common/win32/PersistDisplay.h"
 #include "common\Settings.hpp"
 #include <commctrl.h>
 #include "common/util/cliConverter.hpp"
@@ -65,18 +66,26 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	}
 
 	/*! initialize shared memory */
-	if (!EmuShared::Init(cli_config::GetSessionID())) {
+	const long long sessionID = cli_config::GetSessionID();
+	if (!EmuShared::Init(sessionID)) {
 		PopupError(nullptr, "Could not map shared memory!");
+		return EXIT_FAILURE;
+	}
+	if (!PersistDisplay::Init(sessionID)) {
+		PopupError(nullptr, "Could not map persist display memory!");
+		EmuShared::Cleanup();
 		return EXIT_FAILURE;
 	}
 
 	if (!HandleFirstLaunch()) {
+		PersistDisplay::Cleanup();
 		EmuShared::Cleanup();
 		return EXIT_FAILURE;
 	}
 
 	if (cli_config::hasKey("load")) {
 		PopupError(nullptr, "Emulation must be launched from cxbxr-ldr.exe!");
+		PersistDisplay::Cleanup();
 		EmuShared::Cleanup();
 		return EXIT_FAILURE;
 	}
@@ -84,6 +93,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 	// If 2nd GUI executable is launched, load settings file for GUI for editable support.
 	if (g_Settings == nullptr) {
 		if (!CreateSettings()) {
+			PersistDisplay::Cleanup();
 			EmuShared::Cleanup();
 			return EXIT_FAILURE;
 		}
@@ -132,6 +142,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
     delete MainWindow;
 
     /*! cleanup shared memory */
+	PersistDisplay::Cleanup();
     EmuShared::Cleanup();
 
     return EXIT_SUCCESS;

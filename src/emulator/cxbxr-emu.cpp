@@ -33,6 +33,7 @@
 #include "VerifyAddressRanges.h" // For VerifyBaseAddr()
 //#include "CxbxKrnl/Emu.h"
 #include "EmuShared.h"
+#include "common/win32/PersistDisplay.h"
 #include "core\kernel\init\CxbxKrnl.h" // For HandleFirstLaunch() and LaunchEmulation()
 //#include <commctrl.h>
 #include "common/util/cliConverter.hpp"
@@ -161,8 +162,14 @@ DWORD WINAPI Emulate(unsigned int reserved_systems, blocks_reserved_t blocks_res
 	}
 
 	/*! initialize shared memory */
-	if (!EmuShared::Init(cli_config::GetSessionID())) {
+	const long long sessionID = cli_config::GetSessionID();
+	if (!EmuShared::Init(sessionID)) {
 		PopupError(nullptr, "Could not map shared memory!");
+		return EXIT_FAILURE;
+	}
+	if (!PersistDisplay::Init(sessionID)) {
+		PopupError(nullptr, "Could not map persist display memory!");
+		EmuShared::Cleanup();
 		return EXIT_FAILURE;
 	}
 
@@ -174,12 +181,14 @@ DWORD WINAPI Emulate(unsigned int reserved_systems, blocks_reserved_t blocks_res
 
 	if (!HandleFirstLaunch()) {
 		PopupError(nullptr, "First launch failed!");
+		PersistDisplay::Cleanup();
 		EmuShared::Cleanup();
 		return EXIT_FAILURE;
 	}
 
 	if (!reserved_systems) {
 		PopupError(nullptr, "Unable to preserve any system's memory ranges!");
+		PersistDisplay::Cleanup();
 		EmuShared::Cleanup();
 		return EXIT_FAILURE;
 	}
@@ -187,6 +196,7 @@ DWORD WINAPI Emulate(unsigned int reserved_systems, blocks_reserved_t blocks_res
 	CxbxKrnlEmulate(reserved_systems, blocks_reserved);
 
 	/*! cleanup shared memory */
+	PersistDisplay::Cleanup();
 	EmuShared::Cleanup();
 
 	// Note : Emulate() must never return to it's caller (rawMain() in loader.cpp),

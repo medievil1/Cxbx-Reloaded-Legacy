@@ -579,6 +579,10 @@ XBSYSAPI EXPORTNUM(49) xbox::void_xt DECLSPEC_NORETURN NTAPI xbox::HalReturnToFi
 				g_EmuShared->SetBootFlags(&QuickReboot);
 				is_reboot = true;
 
+				if (!CxbxPersistDisplayCaptureCurrentFrame()) {
+					EmuLog(LOG_LEVEL::WARNING, "PersistDisplay capture failed before quick reboot");
+				}
+
 				// Save window state so the new process can restore position/fullscreen
 				CxbxSaveWindowStateForReboot();
 
@@ -602,6 +606,8 @@ XBSYSAPI EXPORTNUM(49) xbox::void_xt DECLSPEC_NORETURN NTAPI xbox::HalReturnToFi
 	{
 		xbox::HalWriteSMBusValue(SMBUS_ADDRESS_SYSTEM_MICRO_CONTROLLER, SMC_COMMAND_SCRATCH, 0, SMC_SCRATCH_DISPLAY_FATAL_ERROR);
 		is_reboot = true;
+
+		(void)CxbxPersistDisplayCaptureCurrentFrame();
 
 		g_VMManager.SavePersistentMemory();
 
