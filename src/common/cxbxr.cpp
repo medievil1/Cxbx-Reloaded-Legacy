@@ -120,6 +120,17 @@ bool HandleFirstLaunch()
 		g_renderbase = nullptr;
 	}
 
+	// On a quick reboot, explicitly close the render window before TerminateProcess.
+	// TerminateProcess kills the message-pump thread without processing WM_DESTROY,
+	// so ipc_send_gui_update(WINDOW_DESTROYED) would never be sent and the GUI would
+	// never get the signal to paint the captured frame.  Sending WM_CLOSE here lets the
+	// message pump run WM_DESTROY normally, which notifies the GUI and triggers an
+	// immediate repaint with the captured frame before the new emu window appears.
+	if (is_reboot && CxbxKrnl_hEmuParent != NULL && g_hEmuWindow != NULL && IsWindow(g_hEmuWindow)) {
+		SendMessage(g_hEmuWindow, WM_CLOSE, 0, 0);
+		g_hEmuWindow = NULL;
+	}
+
 	// NOTE: Require to be after g_renderbase's shutdown process.
 	// NOTE: Must be last step of shutdown process and before CxbxUnlockFilePath call!
 	// Shutdown the memory manager
