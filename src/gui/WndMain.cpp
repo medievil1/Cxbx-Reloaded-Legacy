@@ -772,6 +772,12 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 									if (m_hLastFrameBmp) { DeleteObject(m_hLastFrameBmp); }
 									m_hLastFrameBmp = bmp;
+
+									// Immediately update the GUI window's surface so DWM
+									// reveals the last game frame (not the splash) the
+									// instant the emu render popup is destroyed.
+									InvalidateRect(hwnd, NULL, FALSE);
+									UpdateWindow(hwnd);
 								}
 								DeleteDC(memDC);
 							}
