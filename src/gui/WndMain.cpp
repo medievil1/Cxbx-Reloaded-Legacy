@@ -410,6 +410,7 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							break;
 
 						case ID_GUI_STATUS_EMU_HWND:
+							// The emu process sends its render window HWND (lParam).
 							// New emu render window is ready; drop the captured last frame
 							// (the new window now covers the GUI client area).
 							if (m_hLastFrameBmp) {
@@ -434,6 +435,9 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 								int w = r.right - r.left;
 								int h = r.bottom - r.top;
 								MapWindowPoints(m_hwnd, NULL, reinterpret_cast<POINT*>(&r), 2);
+								// Release any previous capture unconditionally so a stale bitmap
+								// from an earlier reboot is never shown if the new capture fails.
+								if (m_hLastFrameBmp) { DeleteObject(m_hLastFrameBmp); m_hLastFrameBmp = nullptr; }
 								HDC screenDC = GetDC(NULL);
 								if (screenDC) {
 									HDC memDC = CreateCompatibleDC(screenDC);
@@ -443,7 +447,6 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 											HGDIOBJ old = SelectObject(memDC, bmp);
 											BitBlt(memDC, 0, 0, w, h, screenDC, r.left, r.top, SRCCOPY);
 											SelectObject(memDC, old);
-											if (m_hLastFrameBmp) { DeleteObject(m_hLastFrameBmp); }
 											m_hLastFrameBmp = bmp;
 										}
 										DeleteDC(memDC);
@@ -535,9 +538,10 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
                     if (memDC) {
                         HGDIOBJ oldBmp = SelectObject(memDC, m_hLastFrameBmp);
                         BITMAP bmpInfo = {};
-                        GetObject(m_hLastFrameBmp, sizeof(bmpInfo), &bmpInfo);
-                        StretchBlt(hDC, 0, 0, m_w, m_h,
-                                   memDC, 0, 0, bmpInfo.bmWidth, bmpInfo.bmHeight, SRCCOPY);
+                        if (GetObject(m_hLastFrameBmp, sizeof(bmpInfo), &bmpInfo) && bmpInfo.bmWidth > 0 && bmpInfo.bmHeight > 0) {
+                            StretchBlt(hDC, 0, 0, m_w, m_h,
+                                       memDC, 0, 0, bmpInfo.bmWidth, bmpInfo.bmHeight, SRCCOPY);
+                        }
                         SelectObject(memDC, oldBmp);
                         DeleteDC(memDC);
                     }
