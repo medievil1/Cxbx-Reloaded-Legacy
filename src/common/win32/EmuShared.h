@@ -273,10 +273,6 @@ class EmuShared : public Mutex
 		void ClearSavedWindowState() { Lock(); m_bSavedWindowStateValid = false; Unlock(); }
 
 		// ******************************************************************
-		// * Render-window HWND (GUI-owned WS_CHILD window that persists across emu cycles)
-		// ******************************************************************
-
-		// ******************************************************************
 		// * ClipCursor flag Accessors
 		// ******************************************************************
 		void GetClipCursorFlag(bool *value) { Lock(); *value = m_bClipCursor; Unlock(); }
