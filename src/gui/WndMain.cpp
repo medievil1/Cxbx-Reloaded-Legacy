@@ -216,6 +216,7 @@ WndMain::WndMain(HINSTANCE x_hInstance) :
 	, m_hDebuggerMonitorThread()
 	, m_prevWindowLoc({ -1, -1 })
 	, m_LogKrnl_status(false)
+	, m_hLastFrameBmp(nullptr)
 {
 	// initialize members
 	{
@@ -409,8 +410,12 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							break;
 
 						case ID_GUI_STATUS_EMU_HWND:
-							// The emu process sends its hidden IPC window HWND (GUI embedded mode)
-							// or render window HWND (standalone mode).
+							// New emu render window is ready; drop the captured last frame
+							// (the new window now covers the GUI client area).
+							if (m_hLastFrameBmp) {
+								DeleteObject(m_hLastFrameBmp);
+								m_hLastFrameBmp = nullptr;
+							}
 							m_hwndChild = (HWND)(uintptr_t)lParam;
 							UpdateCaption();
 							RefreshMenus();
@@ -420,8 +425,32 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							if (!m_iIsEmulating) {
 								m_hwndChild = NULL;
 								StopEmulation();
+							} else {
+								// Reboot: capture the last rendered frame from the screen while
+								// the emu window is still composited, so WM_PAINT can show it
+								// instead of the splash during the process-cycle gap.
+								RECT r;
+								GetClientRect(m_hwnd, &r);
+								int w = r.right - r.left;
+								int h = r.bottom - r.top;
+								MapWindowPoints(m_hwnd, NULL, reinterpret_cast<POINT*>(&r), 2);
+								HDC screenDC = GetDC(NULL);
+								if (screenDC) {
+									HDC memDC = CreateCompatibleDC(screenDC);
+									if (memDC) {
+										HBITMAP bmp = CreateCompatibleBitmap(screenDC, w, h);
+										if (bmp) {
+											HGDIOBJ old = SelectObject(memDC, bmp);
+											BitBlt(memDC, 0, 0, w, h, screenDC, r.left, r.top, SRCCOPY);
+											SelectObject(memDC, old);
+											if (m_hLastFrameBmp) { DeleteObject(m_hLastFrameBmp); }
+											m_hLastFrameBmp = bmp;
+										}
+										DeleteDC(memDC);
+									}
+									ReleaseDC(NULL, screenDC);
+								}
 							}
-							// During reboot: the new emu process will create its own render window.
 							break;
 					}
 				}
@@ -499,6 +528,20 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
                 bkRect.bottom -= nLogoBmpH + 10;
 
+                if (m_hLastFrameBmp != nullptr) {
+                    // During a reboot gap: show the last rendered frame captured from the
+                    // previous XBE so the user sees a seamless transition instead of the splash.
+                    HDC memDC = CreateCompatibleDC(hDC);
+                    if (memDC) {
+                        HGDIOBJ oldBmp = SelectObject(memDC, m_hLastFrameBmp);
+                        BITMAP bmpInfo = {};
+                        GetObject(m_hLastFrameBmp, sizeof(bmpInfo), &bmpInfo);
+                        StretchBlt(hDC, 0, 0, m_w, m_h,
+                                   memDC, 0, 0, bmpInfo.bmWidth, bmpInfo.bmHeight, SRCCOPY);
+                        SelectObject(memDC, oldBmp);
+                        DeleteDC(memDC);
+                    }
+                } else {
                 // The emu process render window covers the content area during
                 // emulation, so the splash is only visible when not emulating.
                 FillRect(hDC, &bkRect, m_BackgroundColor);
@@ -538,6 +581,7 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 SelectObject(hDC, tmpObj);
 
                 DeleteObject(hFont);
+                } // end else (no last frame)
             }
 
             if(hDC != NULL)
@@ -2451,6 +2495,11 @@ void WndMain::StopEmulation()
 	ResizeWindow(m_hwnd, /*bForGUI=*/true);
 
 	g_EmuShared->SetIsEmulating(false);
+
+	if (m_hLastFrameBmp) {
+		DeleteObject(m_hLastFrameBmp);
+		m_hLastFrameBmp = nullptr;
+	}
 
 	DrawLedBitmap(m_hwnd, true);
 }
