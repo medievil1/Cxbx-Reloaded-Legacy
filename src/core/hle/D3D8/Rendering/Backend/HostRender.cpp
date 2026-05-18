@@ -25,6 +25,7 @@
 #include "../EmuD3D8_common.h"
 #include <dxgi1_5.h> // IDXGIFactory5, DXGI_FEATURE_PRESENT_ALLOW_TEARING
 #include "Backend_D3D11_PageTracker.h"
+#include "common/win32/PersistDisplay.h"
 #include "devices\video\nv2a.h" // NV2AState
 
 
@@ -438,7 +439,9 @@ void CreateDefaultDevice
    	   	LOG_TEST_CASE("Can't CreateQuery(D3DQUERYTYPE_OCCLUSION) on host!");
    	}
 
-   	DrawInitialBlackScreen();
+	if (!PersistDisplay::HasFrame()) {
+		DrawInitialBlackScreen();
+	}
 
    	// Set up ImGui's render backend
 	ImGui_ImplDX11_Init(g_pD3DDevice, g_pD3DDeviceContext);

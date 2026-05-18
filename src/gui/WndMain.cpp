@@ -83,6 +83,26 @@ static int splashLogoWidth, splashLogoHeight;
 
 bool g_SaveOnExit = true;
 
+static void PaintPersistedFrameToWindow(HWND hwnd, HBRUSH backgroundBrush)
+{
+	if (hwnd == NULL || !PersistDisplay::HasFrame()) {
+		return;
+	}
+
+	HDC hDC = GetDC(hwnd);
+	if (hDC == NULL) {
+		return;
+	}
+
+	RECT clientRect;
+	if (GetClientRect(hwnd, &clientRect)) {
+		FillRect(hDC, &clientRect, backgroundBrush);
+		(void)PersistDisplay::Paint(hDC, clientRect);
+	}
+
+	ReleaseDC(hwnd, hDC);
+}
+
 void ClearSymbolCache(const char sStorageLocation[MAX_PATH])
 {
 	std::string cacheDir = std::string(sStorageLocation) + "\\SymbolCache\\";
@@ -419,6 +439,10 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 								InvalidateRect(hwnd, nullptr, FALSE);
 								UpdateWindow(hwnd);
 							}
+							break;
+
+						case ID_GUI_STATUS_PREPERSIST_FRAME:
+							PaintPersistedFrameToWindow(hwnd, m_Brushes[0]);
 							break;
 					}
 				}
