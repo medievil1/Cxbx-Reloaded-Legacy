@@ -115,7 +115,7 @@ DWORD WINAPI EmuRenderWindow(LPVOID lpParam)
 {
 	CxbxSetThreadName("Cxbx Render Window");
 
-	// GUI embedded mode: the render target is a GUI-owned WS_CHILD window that persists
+	// GUI embedded mode: the render target is a GUI-owned WS_POPUP window that persists
 	// across emu process cycles (no splash-screen gap on reboot).  Create a hidden
 	// HWND_MESSAGE window in this process to receive WM_COMMAND / hotkey / raw-input msgs.
 	if (CxbxKrnl_hEmuParent != NULL) {
@@ -346,10 +346,6 @@ void ToggleFauxFullscreen(HWND hWnd)
    	if (g_bIsFauxFullscreen) {
    	   	GetWindowRect(hWnd, &lRect);
    	   	gwl_style = GetWindowLong(hWnd, GWL_STYLE);
-   	   	if (CxbxKrnl_hEmuParent) {
-   	   	   	// hWnd is a GUI-owned WS_CHILD; reparent to desktop before going fullscreen.
-   	   	   	SetParent(hWnd, NULL);
-   	   	}
    	   	SetWindowLong(hWnd, GWL_STYLE, WS_POPUP);
    	   	SetWindowPos(hWnd, HWND_TOPMOST, lRect.left, lRect.top, 0, 0, SWP_NOSIZE);
    	   	ShowWindow(hWnd, SW_MAXIMIZE);
@@ -357,12 +353,15 @@ void ToggleFauxFullscreen(HWND hWnd)
    	else {
    	   	SetWindowLong(hWnd, GWL_STYLE, gwl_style);
    	   	if(CxbxKrnl_hEmuParent) {
-   	   	   	// Re-parent back to the GUI and reposition over the client area.
-   	   	   	SetParent(hWnd, CxbxKrnl_hEmuParent);
+   	   	   	// Restore to cover the GUI client area again.
    	   	   	RECT clientRect;
    	   	   	GetClientRect(CxbxKrnl_hEmuParent, &clientRect);
-   	   	   	SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0,
-   	   	   	   	clientRect.right, clientRect.bottom, SWP_NOACTIVATE);
+   	   	   	MapWindowPoints(CxbxKrnl_hEmuParent, NULL, (LPPOINT)&clientRect, 2);
+   	   	   	SetWindowPos(hWnd, HWND_NOTOPMOST,
+   	   	   	   	clientRect.left, clientRect.top,
+   	   	   	   	clientRect.right - clientRect.left,
+   	   	   	   	clientRect.bottom - clientRect.top,
+   	   	   	   	SWP_NOACTIVATE);
    	   	   	ShowWindow(hWnd, SW_SHOW);
    	   	}
    	   	else {

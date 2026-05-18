@@ -89,6 +89,7 @@ class WndMain : public Wnd
 		// * resize the main window for either GUI or emulation
 		// ******************************************************************
 		void ResizeWindow(HWND hwnd, bool bForGUI);
+		void RepositionRenderWindow();
 
         // ******************************************************************
         // * after an xbe is loaded, some things must be updated
@@ -178,11 +179,9 @@ class WndMain : public Wnd
 		int         m_xBmp, m_yBmp;
         HBRUSH      m_BackgroundColor;
 
-        // GUI-owned WS_CHILD render window that persists across emu process cycles.
+        // GUI-owned WS_POPUP render window that persists across emu process cycles.
         // Created in StartEmulation, destroyed in StopEmulation.
         HWND        m_hwndRender;
-        bool        m_bCreatingRenderChild;   // suppresses WM_PARENTNOTIFY during CreateWindow(m_hwndRender)
-        bool        m_bDestroyingRenderChild; // suppresses WM_PARENTNOTIFY during DestroyWindow(m_hwndRender)
 
         // ******************************************************************
         // * Xbe objects
