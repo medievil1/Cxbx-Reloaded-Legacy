@@ -391,6 +391,13 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							Crash_Manager_Data* pCMD = (Crash_Manager_Data*)malloc(sizeof(Crash_Manager_Data));
 							pCMD->pWndMain = this;
 							pCMD->dwChildProcID = lParam; // lParam is process ID.
+							// Increment HERE (GUI main thread, synchronous with the SendMessage that
+							// blocks the new emu process) so the count is already ≥2 by the time
+							// the old emu exits and its CrashMonitorWrapper thread decrements.
+							// Previously the increment was inside CrashMonitorWrapper (background
+							// thread), which could race with the old thread's decrement reaching 0
+							// and calling StopEmulation prematurely during a quick reboot.
+							m_iIsEmulating++;
 							std::thread(CrashMonitorWrapper, pCMD).detach();
 
 							g_EmuShared->SetIsEmulating(true); // NOTE: Putting in here raise to low or medium risk due to debugger will launch itself. (Current workaround)
@@ -413,6 +420,13 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							if (!m_iIsEmulating) {
 								m_hwndChild = NULL;
 								StopEmulation();
+							} else {
+								// During a quick reboot the emu popup is gone but the GUI
+								// window may not receive a natural WM_PAINT (WS_POPUP does
+								// not always invalidate the parent the way WS_CHILD does).
+								// Force a repaint now so the captured frame is shown.
+								InvalidateRect(m_hwnd, NULL, FALSE);
+								UpdateWindow(m_hwnd);
 							}
 							break;
 					}
@@ -2507,7 +2521,10 @@ void WndMain::StopEmulation()
 DWORD WndMain::CrashMonitorWrapper(LPVOID lpParam)
 {
 	Crash_Manager_Data* pCMD = (Crash_Manager_Data*)lpParam;
-	static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating++; // Multi-xbe boots usage check
+	// NOTE: m_iIsEmulating was already incremented on the GUI thread inside the
+	// ID_GUI_STATUS_KRNL_IS_READY handler (synchronous with the new emu's SendMessage)
+	// to avoid a race where this thread might not start before the previous process'
+	// CrashMonitorWrapper decrements the count to zero and calls StopEmulation.
 	static_cast<WndMain*>(pCMD->pWndMain)->CrashMonitor(pCMD->dwChildProcID);
 	// Check if is not zero and avoid accidental decrement.
 	if (static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating) {
