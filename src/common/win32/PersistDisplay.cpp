@@ -16,7 +16,7 @@ struct SharedFrame {
 	volatile LONG state;
 	LONG width;
 	LONG height;
-	LONG strideBytes;
+	LONG rowBytes;
 	uint8_t pixels[kMaxBytes];
 };
 
@@ -87,7 +87,7 @@ void Clear()
 
 	g_sharedFrame->width = 0;
 	g_sharedFrame->height = 0;
-	g_sharedFrame->strideBytes = 0;
+	g_sharedFrame->rowBytes = 0;
 	MemoryBarrier();
 	g_sharedFrame->state = kStateEmpty;
 }
@@ -100,7 +100,7 @@ bool HasFrame()
 
 	return IsDimensionValid(g_sharedFrame->width, kMaxWidth)
 		&& IsDimensionValid(g_sharedFrame->height, kMaxHeight)
-		&& g_sharedFrame->strideBytes >= g_sharedFrame->width * 4;
+		&& g_sharedFrame->rowBytes >= g_sharedFrame->width * 4;
 }
 
 bool StoreBgraFrame(const void* pixels, uint32_t width, uint32_t height, uint32_t strideBytes)
@@ -118,7 +118,7 @@ bool StoreBgraFrame(const void* pixels, uint32_t width, uint32_t height, uint32_
 	g_sharedFrame->state = kStateWriting;
 	g_sharedFrame->width = static_cast<LONG>(width);
 	g_sharedFrame->height = static_cast<LONG>(height);
-	g_sharedFrame->strideBytes = static_cast<LONG>(rowBytes);
+	g_sharedFrame->rowBytes = static_cast<LONG>(rowBytes);
 
 	const auto* src = static_cast<const uint8_t*>(pixels);
 	auto* dst = g_sharedFrame->pixels;
