@@ -159,7 +159,7 @@ void WndMain::RepositionRenderWindow()
 	RECT clientRect;
 	GetClientRect(m_hwnd, &clientRect);
 	MapWindowPoints(m_hwnd, NULL, (LPPOINT)&clientRect, 2);
-	SetWindowPos(m_hwndRender, HWND_TOP,
+	SetWindowPos(m_hwndRender, NULL,
 		clientRect.left, clientRect.top,
 		clientRect.right - clientRect.left,
 		clientRect.bottom - clientRect.top,

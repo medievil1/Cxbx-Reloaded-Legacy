@@ -346,6 +346,8 @@ void ToggleFauxFullscreen(HWND hWnd)
    	if (g_bIsFauxFullscreen) {
    	   	GetWindowRect(hWnd, &lRect);
    	   	gwl_style = GetWindowLong(hWnd, GWL_STYLE);
+   	   	// Force WS_POPUP for fullscreen; in GUI embedded mode the window is already WS_POPUP
+   	   	// so this is a no-op, but it ensures correct behaviour in standalone mode too.
    	   	SetWindowLong(hWnd, GWL_STYLE, WS_POPUP);
    	   	SetWindowPos(hWnd, HWND_TOPMOST, lRect.left, lRect.top, 0, 0, SWP_NOSIZE);
    	   	ShowWindow(hWnd, SW_MAXIMIZE);
