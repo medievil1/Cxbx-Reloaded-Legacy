@@ -488,7 +488,7 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
             HDC hDC = GetDC(hwnd);
 
-			const bool showPersistedFrame = (m_hwndChild == NULL) && (m_iIsEmulating != 0) && PersistDisplay::HasFrame();
+			const bool showPersistedFrame = (m_hwndChild == NULL) && PersistDisplay::HasFrame();
 
             // draw splash / logo / status
             if (showPersistedFrame)
