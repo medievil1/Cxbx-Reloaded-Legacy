@@ -283,11 +283,15 @@ bool CxbxAvPersistCurrentDisplayState()
 			if (hSection != nullptr) {
 				void* pData = MapViewOfFile(hSection, FILE_MAP_WRITE, 0, 0, current.SurfaceSize);
 				if (pData != nullptr) {
-					memcpy(pData, reinterpret_cast<const void*>(current.FrameBuffer), current.SurfaceSize);
+					// current.FrameBuffer is a physical offset into NV2A VRAM (0..64MB).
+					// After CxbxPageTrackerFlushGPUDirtyToMirror the D3D11 RT data has
+					// been copied to host VA = CONTIGUOUS_MEMORY_BASE + offset.
+					memcpy(pData, reinterpret_cast<const void*>(CONTIGUOUS_MEMORY_BASE + current.FrameBuffer), current.SurfaceSize);
 					UnmapViewOfFile(pData);
+					// Only mark the capture valid when we actually wrote the pixels.
+					g_EmuShared->SetCapturedFrameMeta(current.Width, current.Height, current.Pitch, bpp, current.SurfaceSize);
 				}
 				CloseHandle(hSection);
-				g_EmuShared->SetCapturedFrameMeta(current.Width, current.Height, current.Pitch, bpp, current.SurfaceSize);
 			}
 		}
 	}
