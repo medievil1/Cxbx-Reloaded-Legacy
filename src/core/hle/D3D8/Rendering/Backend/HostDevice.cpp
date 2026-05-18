@@ -131,14 +131,23 @@ DWORD WINAPI EmuRenderWindow(LPVOID lpParam)
 			HWND_MESSAGE, nullptr, hActiveModule, nullptr);
 
 		// Wait until the GUI has written the render-window HWND into EmuShared.
-		while (true) {
-			uint64_t renderHwnd = 0;
-			g_EmuShared->GetRenderHwnd(&renderHwnd);
-			if (renderHwnd != 0 && IsWindow((HWND)(uintptr_t)renderHwnd)) {
-				g_hEmuWindow = (HWND)(uintptr_t)renderHwnd;
-				break;
+		// Time out after 10 seconds to avoid hanging indefinitely if the GUI fails.
+		{
+			constexpr int kTimeoutMs = 10000;
+			int elapsed = 0;
+			while (elapsed < kTimeoutMs) {
+				uint64_t renderHwnd = 0;
+				g_EmuShared->GetRenderHwnd(&renderHwnd);
+				if (renderHwnd != 0 && IsWindow((HWND)(uintptr_t)renderHwnd)) {
+					g_hEmuWindow = (HWND)(uintptr_t)renderHwnd;
+					break;
+				}
+				Sleep(1);
+				++elapsed;
 			}
-			Sleep(1);
+			if (g_hEmuWindow == NULL) {
+				CxbxrAbort("Timed out waiting for GUI render window HWND");
+			}
 		}
 
 		// Restore faux fullscreen from the previous reboot if needed.

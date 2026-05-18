@@ -2368,15 +2368,15 @@ void WndMain::StartEmulation(HWND hwndParent, DebuggerState LocalDebuggerState /
 	// it down between emu process cycles (reboots).
 	{
 		if (m_hwndRender == nullptr) {
-			static bool sClassRegistered = false;
-			if (!sClassRegistered) {
-				WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, DefWindowProc, 0, 0,
-					m_hInstance, nullptr, nullptr,
-					(HBRUSH)GetStockObject(BLACK_BRUSH),
-					nullptr, "CxbxEmuRender", nullptr };
-				RegisterClassEx(&wc);
-				sClassRegistered = true;
-			}
+			// Register the class if not already done.  RegisterClassEx returns 0 and
+			// sets ERROR_CLASS_ALREADY_EXISTS if the class was registered previously;
+			// that is harmless since the class persists for the process lifetime.
+			WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, DefWindowProc, 0, 0,
+				m_hInstance, nullptr, nullptr,
+				(HBRUSH)GetStockObject(BLACK_BRUSH),
+				nullptr, "CxbxEmuRender", nullptr };
+			RegisterClassEx(&wc);
+
 			RECT clientRect;
 			GetClientRect(m_hwnd, &clientRect);
 			m_bCreatingRenderChild = true;
