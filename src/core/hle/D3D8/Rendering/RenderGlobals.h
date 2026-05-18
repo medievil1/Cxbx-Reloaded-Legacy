@@ -130,6 +130,10 @@ extern void CxbxInitWindow();
 // Save window state (position, size, faux fullscreen) to shared memory for reboot persistence
 extern void CxbxSaveWindowStateForReboot();
 
+// Send the last rendered Xbox framebuffer to the GUI parent via WM_COPYDATA so the
+// GUI can display it instead of the Cxbx splash during the reboot process-cycle gap.
+extern void CxbxSendLastFrameToParent();
+
 void CxbxUpdateNativeD3DResources();
 
 // Shader constant helpers

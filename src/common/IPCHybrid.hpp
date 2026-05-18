@@ -30,6 +30,23 @@
 //       isn't there yet.
 
 // ******************************************************************
+// WM_COPYDATA payload sent from the emu process to the GUI parent
+// just before a reboot so the GUI can freeze on the last rendered
+// frame instead of flashing the Cxbx splash screen.
+// ******************************************************************
+#define CXBXR_COPYDATA_LASTFRAME 0x43584246UL  // 'CXBF'
+
+#pragma pack(push, 1)
+struct CxbxLastFrameHeader {
+    DWORD Width;    ///< frame width in pixels
+    DWORD Height;   ///< frame height in pixels
+    DWORD Pitch;    ///< bytes per row
+    DWORD Format;   ///< Xbox X_D3DFORMAT value
+    // Immediately followed by Pitch * Height bytes of pixel data
+};
+#pragma pack(pop)
+
+// ******************************************************************
 // For kernel process use only
 // ******************************************************************
 

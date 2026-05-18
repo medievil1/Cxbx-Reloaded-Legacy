@@ -426,34 +426,9 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							if (!m_iIsEmulating) {
 								m_hwndChild = NULL;
 								StopEmulation();
-							} else {
-								// Reboot: capture the last rendered frame from the screen while
-								// the emu window is still composited, so WM_PAINT can show it
-								// instead of the splash during the process-cycle gap.
-								RECT r;
-								GetClientRect(m_hwnd, &r);
-								int w = r.right - r.left;
-								int h = r.bottom - r.top;
-								MapWindowPoints(m_hwnd, NULL, reinterpret_cast<POINT*>(&r), 2);
-								// Release any previous capture unconditionally so a stale bitmap
-								// from an earlier reboot is never shown if the new capture fails.
-								if (m_hLastFrameBmp) { DeleteObject(m_hLastFrameBmp); m_hLastFrameBmp = nullptr; }
-								HDC screenDC = GetDC(NULL);
-								if (screenDC) {
-									HDC memDC = CreateCompatibleDC(screenDC);
-									if (memDC) {
-										HBITMAP bmp = CreateCompatibleBitmap(screenDC, w, h);
-										if (bmp) {
-											HGDIOBJ old = SelectObject(memDC, bmp);
-											BitBlt(memDC, 0, 0, w, h, screenDC, r.left, r.top, SRCCOPY);
-											SelectObject(memDC, old);
-											m_hLastFrameBmp = bmp;
-										}
-										DeleteDC(memDC);
-									}
-									ReleaseDC(NULL, screenDC);
-								}
 							}
+							// During reboot: the new emu process will create its own render window.
+							// m_hLastFrameBmp was already populated via WM_COPYDATA before this fires.
 							break;
 					}
 				}
@@ -704,6 +679,96 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 					OpenXbe(DroppedXbeFilename);
 				}
 			}
+		}
+		break;
+
+		case WM_COPYDATA:
+		{
+			const COPYDATASTRUCT* cds = reinterpret_cast<const COPYDATASTRUCT*>(lParam);
+			if (cds && cds->dwData == CXBXR_COPYDATA_LASTFRAME &&
+				cds->cbData >= static_cast<DWORD>(sizeof(CxbxLastFrameHeader)))
+			{
+				const CxbxLastFrameHeader* hdr =
+					reinterpret_cast<const CxbxLastFrameHeader*>(cds->lpData);
+
+				// Validate that the payload contains at least as many pixel bytes as declared.
+				const DWORD pixelBytes = hdr->Pitch * hdr->Height;
+				if (pixelBytes > 0 && cds->cbData >= sizeof(CxbxLastFrameHeader) + pixelBytes) {
+					// Build BITMAPINFO for the Xbox pixel format so StretchDIBits can
+					// decode the raw bytes into a compatible device bitmap.
+					struct {
+						BITMAPINFOHEADER bmiH;
+						DWORD            masks[3]; // only used for BI_BITFIELDS (R5G6B5)
+					} bmi = {};
+
+					WORD  bitCount    = 32;
+					DWORD compression = BI_RGB;
+
+					switch (static_cast<xbox::X_D3DFORMAT>(hdr->Format)) {
+					case xbox::X_D3DFMT_LIN_A8R8G8B8:
+					case xbox::X_D3DFMT_LIN_X8R8G8B8:
+						bitCount = 32; compression = BI_RGB;
+						break;
+					case xbox::X_D3DFMT_LIN_R5G6B5:
+						bitCount = 16; compression = BI_BITFIELDS;
+						bmi.masks[0] = 0xF800; // R mask
+						bmi.masks[1] = 0x07E0; // G mask
+						bmi.masks[2] = 0x001F; // B mask
+						break;
+					case xbox::X_D3DFMT_LIN_A1R5G5B5:
+					case xbox::X_D3DFMT_LIN_X1R5G5B5:
+						bitCount = 16; compression = BI_RGB; // GDI 555 default
+						break;
+					default:
+						bitCount = 0; // unsupported format; skip
+						break;
+					}
+
+					if (bitCount != 0) {
+						bmi.bmiH.biSize        = sizeof(BITMAPINFOHEADER);
+						bmi.bmiH.biWidth       = static_cast<LONG>(hdr->Width);
+						bmi.bmiH.biHeight      = -static_cast<LONG>(hdr->Height); // top-down
+						bmi.bmiH.biPlanes      = 1;
+						bmi.bmiH.biBitCount    = bitCount;
+						bmi.bmiH.biCompression = compression;
+						bmi.bmiH.biSizeImage   = pixelBytes;
+
+						const BYTE* pixels = reinterpret_cast<const BYTE*>(cds->lpData)
+						                     + sizeof(CxbxLastFrameHeader);
+
+						HDC hDC = GetDC(hwnd);
+						if (hDC) {
+							HDC memDC = CreateCompatibleDC(hDC);
+							if (memDC) {
+								HBITMAP bmp = CreateCompatibleBitmap(hDC,
+								                 static_cast<int>(hdr->Width),
+								                 static_cast<int>(hdr->Height));
+								if (bmp) {
+									HGDIOBJ old = SelectObject(memDC, bmp);
+									StretchDIBits(memDC,
+									    0, 0,
+									    static_cast<int>(hdr->Width),
+									    static_cast<int>(hdr->Height),
+									    0, 0,
+									    static_cast<int>(hdr->Width),
+									    static_cast<int>(hdr->Height),
+									    pixels,
+									    reinterpret_cast<const BITMAPINFO*>(&bmi),
+									    DIB_RGB_COLORS, SRCCOPY);
+									SelectObject(memDC, old);
+
+									if (m_hLastFrameBmp) { DeleteObject(m_hLastFrameBmp); }
+									m_hLastFrameBmp = bmp;
+								}
+								DeleteDC(memDC);
+							}
+							ReleaseDC(hwnd, hDC);
+						}
+					}
+				}
+				return TRUE;
+			}
+			return DefWindowProc(hwnd, uMsg, wParam, lParam);
 		}
 		break;
 

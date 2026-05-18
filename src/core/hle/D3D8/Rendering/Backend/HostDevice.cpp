@@ -23,6 +23,9 @@
 // *
 // ******************************************************************
 #include "../EmuD3D8_common.h"
+#include "core\kernel\exports\EmuKrnl.h"
+#include "common\IPCHybrid.hpp"
+#include <vector>
 
 // Variables only used in HostDevice.cpp
 static HBRUSH g_hBgBrush = NULL; // Background Brush
@@ -46,6 +49,49 @@ void CxbxSaveWindowStateForReboot()
 	if (GetWindowRect(g_hEmuWindow, &rect)) {
 		g_EmuShared->SetSavedWindowState(&rect, g_bIsFauxFullscreen);
 	}
+}
+
+void CxbxSendLastFrameToParent()
+{
+	// Only applicable in GUI-embedded mode; standalone mode has no parent to paint.
+	if (CxbxKrnl_hEmuParent == NULL)
+		return;
+
+	CxbxAvDisplayState savedDisplay = {};
+	if (!CxbxAvGetSavedDisplayState(&savedDisplay))
+		return;
+
+	if (!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer) ||
+		!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer + savedDisplay.SurfaceSize - 1))
+		return;
+
+	// Pack the header and raw pixel bytes into one contiguous buffer and send
+	// via WM_COPYDATA to the GUI parent so it can freeze on this frame instead
+	// of flashing the Cxbx splash during the reboot process-cycle gap.
+	const SIZE_T totalSize = sizeof(CxbxLastFrameHeader) + savedDisplay.SurfaceSize;
+	std::vector<BYTE> buf(totalSize);
+
+	auto* hdr    = reinterpret_cast<CxbxLastFrameHeader*>(buf.data());
+	hdr->Width   = savedDisplay.Width;
+	hdr->Height  = savedDisplay.Height;
+	hdr->Pitch   = savedDisplay.Pitch;
+	hdr->Format  = savedDisplay.Format;
+
+	memcpy(buf.data() + sizeof(CxbxLastFrameHeader),
+	       reinterpret_cast<const void*>(savedDisplay.FrameBuffer),
+	       savedDisplay.SurfaceSize);
+
+	COPYDATASTRUCT cds = {};
+	cds.dwData = CXBXR_COPYDATA_LASTFRAME;
+	cds.cbData = static_cast<DWORD>(totalSize);
+	cds.lpData = buf.data();
+
+	// SendMessage is synchronous: the GUI process stores the frame as a bitmap
+	// before this call returns, ensuring m_hLastFrameBmp is ready before WM_PAINT
+	// can fire after the emu render window disappears.
+	SendMessage(CxbxKrnl_hEmuParent, WM_COPYDATA,
+	            reinterpret_cast<WPARAM>(g_hEmuWindow),
+	            reinterpret_cast<LPARAM>(&cds));
 }
 
 // Forward declarations (defined later in this file)
