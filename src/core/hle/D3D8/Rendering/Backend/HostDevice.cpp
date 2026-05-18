@@ -304,8 +304,8 @@ DWORD WINAPI EmuRenderWindow(LPVOID lpParam)
 			}
 		}
 
-    	   	g_hEmuWindow = CreateWindow
-    	   	(
+		g_hEmuWindow = CreateWindow
+		(
    	   	   	"CxbxRender", "Cxbx-Reloaded",
    	   	   	dwStyle, 
 			windowRect.left,
@@ -313,14 +313,14 @@ DWORD WINAPI EmuRenderWindow(LPVOID lpParam)
 			windowRect.right - windowRect.left,
 			windowRect.bottom - windowRect.top,
    	   	   	hwndParent, nullptr, hActiveModule, // Was GetModuleHandle(nullptr),
-   	   	   	nullptr
-    	   	);
-    	}
+			nullptr
+		);
+	}
 
 	g_bPersistDisplayPaintPending = PersistDisplay::HasFrame();
 
-    	ShowWindow(g_hEmuWindow, ((CxbxKrnl_hEmuParent == 0) || g_XBVideo.bFullScreen) ? SW_SHOWDEFAULT : SW_SHOW);
-    	UpdateWindow(g_hEmuWindow);
+	ShowWindow(g_hEmuWindow, ((CxbxKrnl_hEmuParent == 0) || g_XBVideo.bFullScreen) ? SW_SHOWDEFAULT : SW_SHOW);
+	UpdateWindow(g_hEmuWindow);
 
 	// Restore window state from a previous reboot (secondary XBE load)
 	{
