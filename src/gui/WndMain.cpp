@@ -493,8 +493,11 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
                 // During a quick reboot (emu process cycling), show the last captured
                 // frame in the main window area instead of the Cxbx splash screen.
+                // NOTE: m_hwndChild is intentionally NOT checked here.  During reboot
+                // it is never nullptr (the code that nulls it guards with !m_iIsEmulating),
+                // so the only reliable gate is m_bIsStarted + a valid captured frame.
                 bool bDrewCapturedFrame = false;
-                if (m_iIsEmulating > 0 && m_hwndChild == nullptr && m_hCapturedFrameSection != nullptr) {
+                if (m_bIsStarted && m_hCapturedFrameSection != nullptr) {
                     bool captureValid = false;
                     g_EmuShared->GetCapturedFrameValid(&captureValid);
                     if (captureValid) {
@@ -511,9 +514,12 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
                                 bmi.bmiHeader.biPlanes      = 1;
                                 bmi.bmiHeader.biBitCount    = 32;
                                 bmi.bmiHeader.biCompression = BI_RGB;
+                                // Stretch to the full content area (above the status bar).
+                                // bkRect is the partial dirty rect from ps.rcPaint which
+                                // can be smaller than the window; using it as the destination
+                                // would produce a squished/partial image.
                                 StretchDIBits(hDC,
-                                    bkRect.left, bkRect.top,
-                                    bkRect.right - bkRect.left, bkRect.bottom - bkRect.top,
+                                    0, 0, m_w, m_h - nLogoBmpH - 10,
                                     0, 0, (int)fw, (int)fh,
                                     pFrameData, &bmi, DIB_RGB_COLORS, SRCCOPY);
                                 UnmapViewOfFile(pFrameData);
