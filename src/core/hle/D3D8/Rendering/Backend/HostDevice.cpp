@@ -23,6 +23,7 @@
 // *
 // ******************************************************************
 #include "../EmuD3D8_common.h"
+#include "Backend_D3D11_PageTracker.h"
 #include "common/win32/PersistDisplay.h"
 
 // Variables only used in HostDevice.cpp
