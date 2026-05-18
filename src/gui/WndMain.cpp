@@ -2600,14 +2600,23 @@ DWORD WndMain::CrashMonitorWrapper(LPVOID lpParam)
 	// ID_GUI_STATUS_KRNL_IS_READY handler (synchronous with the new emu's SendMessage)
 	// to avoid a race where this thread might not start before the previous process'
 	// CrashMonitorWrapper decrements the count to zero and calls StopEmulation.
-	static_cast<WndMain*>(pCMD->pWndMain)->CrashMonitor(pCMD->dwChildProcID);
+	WndMain* pWnd = static_cast<WndMain*>(pCMD->pWndMain);
+
+	pWnd->CrashMonitor(pCMD->dwChildProcID);
 	// Check if is not zero and avoid accidental decrement.
-	if (static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating) {
-		static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating--; // Multi-xbe boots usage check
+	if (pWnd->m_iIsEmulating) {
+		pWnd->m_iIsEmulating--; // Multi-xbe boots usage check
 	}
 
-	if (!static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating) {
-		static_cast<WndMain*>(pCMD->pWndMain)->StopEmulation();
+	if (!pWnd->m_iIsEmulating) {
+		pWnd->StopEmulation();
+	} else {
+		// Reboot path: the old emu process has now exited so its render popup is gone.
+		// Force a repaint on the GUI window so the last captured frame (m_hLastFrameBmp)
+		// is displayed instead of the splash while the new emu process starts up.
+		// InvalidateRect is safe to call from any thread; WM_PAINT fires on the GUI
+		// main thread the next time it drains its message queue.
+		InvalidateRect(pWnd->m_hwnd, NULL, FALSE);
 	}
 
 	free(lpParam);
