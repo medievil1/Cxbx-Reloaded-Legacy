@@ -28,9 +28,7 @@
 void RunOnWndMsgThread(const std::function<void()>& func)
 {
 	const void* param = &func;
-	// In GUI embedded mode, dispatch to the hidden IPC window; in standalone mode to the render window.
-	HWND target = (g_hEmuMsgWindow != NULL) ? g_hEmuMsgWindow : g_hEmuWindow;
-	SendMessage(target, WM_CXBXR_RUN_ON_MESSAGE_THREAD, reinterpret_cast<WPARAM>(param), 0);
+	SendMessage(g_hEmuWindow, WM_CXBXR_RUN_ON_MESSAGE_THREAD, reinterpret_cast<WPARAM>(param), 0);
 }
 
 

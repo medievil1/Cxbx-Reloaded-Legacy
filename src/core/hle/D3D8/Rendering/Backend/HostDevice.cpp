@@ -115,75 +115,6 @@ DWORD WINAPI EmuRenderWindow(LPVOID lpParam)
 {
 	CxbxSetThreadName("Cxbx Render Window");
 
-	// GUI embedded mode: the render target is a GUI-owned WS_POPUP window that persists
-	// across emu process cycles (no splash-screen gap on reboot).  Create a hidden
-	// HWND_MESSAGE window in this process to receive WM_COMMAND / hotkey / raw-input msgs.
-	if (CxbxKrnl_hEmuParent != NULL) {
-		// Register a class for the hidden IPC window (no background brush needed).
-		{
-			WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, EmuMsgProc, 0, 0, hActiveModule,
-				0, LoadCursor(NULL, IDC_ARROW), NULL, NULL, "CxbxEmuMsg", nullptr };
-			RegisterClassEx(&wc);
-		}
-
-		// Create the hidden message-only window.
-		g_hEmuMsgWindow = CreateWindow("CxbxEmuMsg", "", 0, 0, 0, 0, 0,
-			HWND_MESSAGE, nullptr, hActiveModule, nullptr);
-
-		// Wait until the GUI has written the render-window HWND into EmuShared.
-		// Time out after 10 seconds to avoid hanging indefinitely if the GUI fails.
-		{
-			constexpr int kTimeoutMs = 10000;
-			int elapsed = 0;
-			while (elapsed < kTimeoutMs) {
-				uint64_t renderHwnd = 0;
-				g_EmuShared->GetRenderHwnd(&renderHwnd);
-				if (renderHwnd != 0 && IsWindow((HWND)(uintptr_t)renderHwnd)) {
-					g_hEmuWindow = (HWND)(uintptr_t)renderHwnd;
-					break;
-				}
-				Sleep(1);
-				++elapsed;
-			}
-			if (g_hEmuWindow == NULL) {
-				CxbxrAbort("Timed out waiting for GUI render window HWND");
-			}
-		}
-
-		// Restore faux fullscreen from the previous reboot if needed.
-		{
-			RECT savedRect;
-			bool bSavedFaux, bValid;
-			g_EmuShared->GetSavedWindowState(&savedRect, &bSavedFaux, &bValid);
-			if (bValid) {
-				g_EmuShared->ClearSavedWindowState();
-				if (bSavedFaux) {
-					ToggleFauxFullscreen(g_hEmuWindow);
-				}
-			}
-		}
-
-		// Notify the GUI of the IPC window handle so it can forward hotkeys / WM_COMMAND.
-		ipc_send_gui_update(IPC_UPDATE_GUI::WINDOW_HANDLE,
-			static_cast<unsigned int>(reinterpret_cast<uintptr_t>(g_hEmuMsgWindow)));
-
-		EmuLog(LOG_LEVEL::DEBUG, "Message-Pump thread is running (GUI embedded mode).");
-
-		SetEvent(*reinterpret_cast<PHANDLE>(lpParam));
-
-		// Message processing loop for the hidden IPC window.
-		MSG msg;
-		BOOL bRet;
-		while ((bRet = GetMessage(&msg, NULL, 0U, 0U)) != FALSE) {
-			if (bRet == -1)
-				CxbxrAbort("GetMessage failed!");
-			TranslateMessage(&msg);
-			DispatchMessage(&msg);
-		}
-
-		CxbxrAbort(nullptr);
-	}
-
    	// register window class
    	{
    	   	LOGBRUSH logBrush = {BS_SOLID, RGB(0,0,0)};
@@ -379,8 +310,6 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 // rendering window message procedure
 LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-	// Only route through ImGui if this IS the render window (standalone mode).
-	// In GUI embedded mode hWnd is the hidden IPC window; ImGui uses polling instead.
 	if (hWnd == g_hEmuWindow) {
 		const LRESULT imguiResult = ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
 		if (imguiResult != 0) return imguiResult;
@@ -390,19 +319,19 @@ LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
    	{
    	   	case WM_DESTROY:
    	   	{
-   	   	   	// Notify GUI that our IPC/render window is gone.
+   	   	   	// Notify GUI that our render window is gone.
    	   	   	if (CxbxKrnl_hEmuParent) {
    	   	   	   	ipc_send_gui_update(IPC_UPDATE_GUI::WINDOW_DESTROYED, 0);
    	   	   	}
 
-   	   	   	// Unhook parent position tracking (standalone mode only)
+   	   	   	// Unhook parent position tracking if active.
    	   	   	if (g_parentEventHook) {
    	   	   	   	UnhookWinEvent(g_parentEventHook);
    	   	   	   	g_parentEventHook = NULL;
    	   	   	}
 
    	   	   	CxbxReleaseCursor();
-   	   	   	// g_hBgBrush is only created in standalone mode; guard against NULL.
+   	   	   	// g_hBgBrush may be NULL if the window class used no background brush.
    	   	   	if (g_hBgBrush) {
    	   	   	   	DeleteObject(g_hBgBrush);
    	   	   	   	g_hBgBrush = NULL;

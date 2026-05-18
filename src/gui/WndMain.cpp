@@ -149,22 +149,6 @@ void WndMain::InitializeSettings()
 #define TIMERID_ACTIVE_EMULATION 0
 #define TIMERID_LED 1
 
-// Reposition the persistent render popup to cover the GUI client area.
-// Must be called whenever the GUI window moves or resizes.
-void WndMain::RepositionRenderWindow()
-{
-	if (m_hwndRender == nullptr || !IsWindow(m_hwndRender))
-		return;
-
-	RECT clientRect;
-	GetClientRect(m_hwnd, &clientRect);
-	MapWindowPoints(m_hwnd, NULL, (LPPOINT)&clientRect, 2);
-	SetWindowPos(m_hwndRender, NULL,
-		clientRect.left, clientRect.top,
-		clientRect.right - clientRect.left,
-		clientRect.bottom - clientRect.top,
-		SWP_NOACTIVATE | SWP_NOZORDER);
-}
 
 void WndMain::ResizeWindow(HWND hwnd, bool bForGUI)
 {
@@ -218,8 +202,6 @@ void WndMain::ResizeWindow(HWND hwnd, bool bForGUI)
 		windowRect.bottom - windowRect.top,
 		SWP_NOOWNERZORDER | SWP_NOZORDER);
 
-	// Keep the render popup aligned with the (possibly updated) client area.
-	RepositionRenderWindow();
 }
 
 WndMain::WndMain(HINSTANCE x_hInstance) :
@@ -234,7 +216,6 @@ WndMain::WndMain(HINSTANCE x_hInstance) :
 	, m_hDebuggerMonitorThread()
 	, m_prevWindowLoc({ -1, -1 })
 	, m_LogKrnl_status(false)
-	, m_hwndRender(nullptr)
 {
 	// initialize members
 	{
@@ -440,7 +421,7 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 								m_hwndChild = NULL;
 								StopEmulation();
 							}
-							// During reboot: m_hwndRender stays alive so no repaint needed.
+							// During reboot: the new emu process will create its own render window.
 							break;
 					}
 				}
@@ -518,7 +499,7 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
                 bkRect.bottom -= nLogoBmpH + 10;
 
-                // The render child window (m_hwndRender) covers the content area during
+                // The emu process render window covers the content area during
                 // emulation, so the splash is only visible when not emulating.
                 FillRect(hDC, &bkRect, m_BackgroundColor);
 
@@ -1433,8 +1414,6 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 			// Redraw the window on move, prevents corrupt background image that happens
 			// when windows doesn't call the WM_DRAW event when the window is moved too quickly.
 			RedrawWindow(hwnd, nullptr, NULL, RDW_INVALIDATE);
-			// Keep the render popup aligned with the new window position.
-			RepositionRenderWindow();
 			break;
 		}
 
@@ -2377,34 +2356,6 @@ void WndMain::StartEmulation(HWND hwndParent, DebuggerState LocalDebuggerState /
 	SetTimer(m_hwnd, TIMERID_ACTIVE_EMULATION, 1000, (TIMERPROC)nullptr);
 	SetTimer(m_hwnd, TIMERID_LED, XBOX_LED_FLASH_PERIOD, (TIMERPROC)nullptr);
 
-	// Create the persistent render window covering the GUI client area.
-	// It is a WS_POPUP window (not WS_CHILD) because DXGI's CreateSwapChainForHwnd
-	// requires a top-level (non-child) window.  It is owned by the GUI window so it
-	// stays associated with it; the GUI tracks moves/resizes to keep it aligned.
-	{
-		if (m_hwndRender == nullptr) {
-			// Register the class if not already done.  RegisterClassEx returns 0 and
-			// sets ERROR_CLASS_ALREADY_EXISTS if the class was registered previously;
-			// that is harmless since the class persists for the process lifetime.
-			WNDCLASSEX wc = { sizeof(WNDCLASSEX), CS_CLASSDC, DefWindowProc, 0, 0,
-				m_hInstance, nullptr, nullptr,
-				(HBRUSH)GetStockObject(BLACK_BRUSH),
-				nullptr, "CxbxEmuRender", nullptr };
-			RegisterClassEx(&wc);
-
-			RECT clientRect;
-			GetClientRect(m_hwnd, &clientRect);
-			MapWindowPoints(m_hwnd, NULL, (LPPOINT)&clientRect, 2);
-			m_hwndRender = CreateWindow("CxbxEmuRender", "",
-				WS_POPUP | WS_VISIBLE,
-				clientRect.left, clientRect.top,
-				clientRect.right - clientRect.left,
-				clientRect.bottom - clientRect.top,
-				m_hwnd, nullptr, m_hInstance, nullptr);
-			g_EmuShared->SetRenderHwnd((uint64_t)(uintptr_t)m_hwndRender);
-		}
-	}
-
 	// shell exe
     {
 
@@ -2500,13 +2451,6 @@ void WndMain::StopEmulation()
 	ResizeWindow(m_hwnd, /*bForGUI=*/true);
 
 	g_EmuShared->SetIsEmulating(false);
-
-	// Destroy the persistent render window now that emulation has fully stopped.
-	if (m_hwndRender != nullptr) {
-		g_EmuShared->ClearRenderHwnd();
-		DestroyWindow(m_hwndRender);
-		m_hwndRender = nullptr;
-	}
 
 	DrawLedBitmap(m_hwnd, true);
 }

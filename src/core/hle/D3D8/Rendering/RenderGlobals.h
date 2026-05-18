@@ -94,7 +94,7 @@ constexpr UINT WM_CXBXR_RUN_ON_MESSAGE_THREAD = WM_USER+0;
 struct FixedFunctionVertexShaderState;
 extern FixedFunctionVertexShaderState ffShaderState;
 extern HWND                          g_hEmuWindow;
-extern HWND                          g_hEmuMsgWindow; // hidden HWND_MESSAGE IPC window (GUI embedded mode only)
+
 extern bool                          g_bClipCursor;
 extern bool                          g_bSupportsFormatSurface[xbox::X_D3DFMT_LAST + 1];
 extern bool                          g_bSupportsFormatSurfaceRenderTarget[xbox::X_D3DFMT_LAST + 1];

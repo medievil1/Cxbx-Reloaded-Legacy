@@ -275,9 +275,6 @@ class EmuShared : public Mutex
 		// ******************************************************************
 		// * Render-window HWND (GUI-owned WS_CHILD window that persists across emu cycles)
 		// ******************************************************************
-		void SetRenderHwnd(uint64_t hwnd) { Lock(); m_RenderHwnd = hwnd; Unlock(); }
-		void GetRenderHwnd(uint64_t *hwnd) { Lock(); *hwnd = m_RenderHwnd; Unlock(); }
-		void ClearRenderHwnd() { Lock(); m_RenderHwnd = 0; Unlock(); }
 
 		// ******************************************************************
 		// * ClipCursor flag Accessors
@@ -426,8 +423,6 @@ class EmuShared : public Mutex
 		bool         m_bSavedFauxFullscreen;
 		bool         m_bSavedWindowStateValid;
 
-		// GUI-owned render window HWND (persists across emu process cycles)
-		uint64_t     m_RenderHwnd;
 };
 
 // ******************************************************************

@@ -33,7 +33,7 @@ using namespace std::literals::chrono_literals;
 
 // Global(s)
 HWND                         g_hEmuWindow   = NULL; // rendering window (GUI-owned WS_CHILD in embedded mode, emu-owned WS_POPUP in standalone)
-HWND                         g_hEmuMsgWindow = NULL; // hidden HWND_MESSAGE IPC window (GUI embedded mode only)
+
 bool                         g_bClipCursor  = false; // indicates that the mouse cursor should be confined inside the rendering window
 ID3D11Device                *g_pD3DDevice   = nullptr; // Direct3D Device
 
