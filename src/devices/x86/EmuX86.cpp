@@ -206,14 +206,14 @@ uint32_t EmuFlash_Read(xbox::addr_xt addr, int size) // TODO : Move to EmuFlash.
 	for (int i = 0; i < size; i++) {
 		uint8_t byteValue;
 		if (!EmuFlash_ReadSynthetic8((imageOffset + i) % FLASH_IMAGE_SIZE, byteValue)) {
-			EmuLog(LOG_LEVEL::WARNING, "Read%d FLASH_ROM (0x%.8X) [Unknown address]", size * 8, imageOffset);
+			EmuLog(LOG_LEVEL::WARNING, "Read%d FLASH_ROM (0x%.8X -> 0x%.8X) [Unknown address]", size * 8, addr, imageOffset);
 			return FLASH_UNKNOWN_READ_VALUE;
 		}
 
 		value |= static_cast<uint32_t>(byteValue) << (i * 8);
 	}
 
-	EmuLog(LOG_LEVEL::DEBUG, "Read%d FLASH_ROM (0x%.8X) = 0x%.8X [HANDLED]", size * 8, imageOffset, value);
+	EmuLog(LOG_LEVEL::DEBUG, "Read%d FLASH_ROM (0x%.8X -> 0x%.8X) = 0x%.8X [HANDLED]", size * 8, addr, imageOffset, value);
 	return value;
 }
 
