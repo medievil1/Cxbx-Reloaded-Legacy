@@ -161,6 +161,7 @@ namespace {
 	constexpr uint32_t FLASH_IMAGE_SIZE = KiB(256);
 	constexpr uint32_t FLASH_IMAGE_VERSION = 5838; // Matches XboxKrnlVersion's default build number.
 	constexpr uint32_t FLASH_ROM_MAGIC = 0xFF0A69F6; // https://xboxdevwiki.net/Flash_ROM
+	constexpr uint32_t FLASH_UNKNOWN_READ_VALUE = 0;
 
 	bool EmuFlash_ReadSynthetic32(uint32_t addr, uint32_t& value)
 	{
@@ -199,20 +200,20 @@ namespace {
 
 uint32_t EmuFlash_Read(xbox::addr_xt addr, int size) // TODO : Move to EmuFlash.cpp
 {
-	const uint32_t flashOffset = (addr - (addr & ~(FLASH_DEVICEN_SIZE - 1))) % FLASH_IMAGE_SIZE;
+	const uint32_t imageOffset = (addr - (addr & ~(FLASH_DEVICEN_SIZE - 1))) % FLASH_IMAGE_SIZE;
 
 	uint32_t value = 0;
 	for (int i = 0; i < size; i++) {
 		uint8_t byteValue;
-		if (!EmuFlash_ReadSynthetic8((flashOffset + i) % FLASH_IMAGE_SIZE, byteValue)) {
-			EmuLog(LOG_LEVEL::WARNING, "Read%d FLASH_ROM (0x%.8X) [Unknown address]", size * 8, flashOffset);
-			return 0;
+		if (!EmuFlash_ReadSynthetic8((imageOffset + i) % FLASH_IMAGE_SIZE, byteValue)) {
+			EmuLog(LOG_LEVEL::WARNING, "Read%d FLASH_ROM (0x%.8X) [Unknown address]", size * 8, imageOffset);
+			return FLASH_UNKNOWN_READ_VALUE;
 		}
 
 		value |= static_cast<uint32_t>(byteValue) << (i * 8);
 	}
 
-	EmuLog(LOG_LEVEL::DEBUG, "Read%d FLASH_ROM (0x%.8X) = 0x%.8X [HANDLED]", size * 8, flashOffset, value);
+	EmuLog(LOG_LEVEL::DEBUG, "Read%d FLASH_ROM (0x%.8X) = 0x%.8X [HANDLED]", size * 8, imageOffset, value);
 	return value;
 }
 
@@ -237,7 +238,7 @@ uint32_t EmuX86_Read(xbox::addr_xt addr, int size)
 	uint32_t value;
 
 	if (addr >= FLASH_DEVICE1_BASE) { // 0xFF000000 - 0xFFFFFFF
-		return EmuFlash_Read(addr, size); // NOTE: Bios is a 256kb rom, mirrored through the address space
+		return EmuFlash_Read(addr, size); // NOTE: EmuFlash_Read mirrors the 256kb image through the flash address space
 	}
 
 	// TODO: Remove this once we have an LLE APU Device
