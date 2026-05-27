@@ -63,6 +63,7 @@ extern UINT  g_D3D11VSConstantsDirtyMax;
 // ******************************************************************
 extern ID3D11VertexShader  *g_pD3D11BlitVS;
 extern ID3D11PixelShader   *g_pD3D11BlitPS;
+extern ID3D11PixelShader   *g_pD3D11BlitYUY2PS;
 extern ID3D11SamplerState  *g_pD3D11BlitSamplerLinear;
 extern ID3D11SamplerState  *g_pD3D11BlitSamplerPoint;
 

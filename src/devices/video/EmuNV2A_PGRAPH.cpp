@@ -665,11 +665,10 @@ void pgraph_handle_method(NV2AState *d,
 			}
 
 			// VBlank-gated frame pacing: wait until the next VBlank deadline.
-			// SleepPrecise uses adaptive yielding (SwitchToThread with EMA tracking)
-			// which donates CPU time to other threads while waiting, then does a
-			// final spin for sub-yield precision.
-			// Local anchor prevents drift without conflicting with the VBlank
-			// interrupt's writes to vblank_last_qpc.
+			// Advance the anchor by the period (rather than using the wake QPC)
+			// to keep the schedule locked to the ideal frame cadence even when
+			// SleepPrecise wakes slightly late.  Only resync to the wake QPC if
+			// we fell behind by multiple periods (e.g. after a system stall).
 			{
 				static int64_t s_flipStallAnchor = 0;
 				unsigned int totalLines = pcrtc_get_total_lines(d);
@@ -678,8 +677,6 @@ void pgraph_handle_method(NV2AState *d,
 
 				// Seed anchor from the real VBlank timestamp on first call,
 				// or reseed if it's fallen too far behind (e.g. after a stall).
-				// SleepPrecise handles the "already behind" case internally
-				// (returns current QPC immediately), so no pre-check needed.
 				int64_t lastVBlank = d->vblank_last_qpc.load(std::memory_order_acquire);
 				if (s_flipStallAnchor == 0) {
 					LARGE_INTEGER now;
@@ -692,8 +689,15 @@ void pgraph_handle_method(NV2AState *d,
 				if (s_flipStallAnchor > 0) {
 					int64_t nextVBlankQPC = s_flipStallAnchor + vblankPeriodTicks;
 					qemu_mutex_unlock(&d->pgraph.pgraph_lock);
-					s_flipStallAnchor = SleepPrecise(nextVBlankQPC);
+					int64_t wakeQPC = SleepPrecise(nextVBlankQPC);
 					qemu_mutex_lock(&d->pgraph.pgraph_lock);
+
+					// Advance anchor by one period to maintain ideal cadence.
+					s_flipStallAnchor += vblankPeriodTicks;
+					// Resync if we fell behind by more than one period.
+					if (wakeQPC > s_flipStallAnchor + vblankPeriodTicks) {
+						s_flipStallAnchor = wakeQPC;
+					}
 				}
 			}
 

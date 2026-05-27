@@ -742,6 +742,18 @@ uint64_t NV2ADevice::vblank_tick(uint64_t now)
 	uint64_t next = d->vblank_last + vblank_period;
 
 	if (now >= next) {
+		// Advance by one period (rather than resetting to 'now') to keep the
+		// VBlank schedule locked to the ideal frame cadence.  Resetting to
+		// 'now' would compound every late fire, causing permanent drift.
+		d->vblank_last += vblank_period;
+
+		// If we fell behind by multiple periods (e.g. after a long system
+		// stall), skip ahead to the current time so we don't burst-fire
+		// catch-up VBlanks.
+		if (now >= d->vblank_last + vblank_period) {
+			d->vblank_last = now;
+		}
+
 		// Use the absolute QPC from HostLastQPC (set by get_now() moments
 		// before) for PCRTC_RASTER scanline position and jitter profiling.
 		int64_t qpcNow = HostLastQPC.load(std::memory_order_relaxed);
@@ -760,8 +772,7 @@ uint64_t NV2ADevice::vblank_tick(uint64_t now)
 		d->vblank_last_qpc.store(qpcNow, std::memory_order_release);
 
 		d->vblank_cb(d);
-		d->vblank_last = now;
-		return now + vblank_period;
+		return d->vblank_last + vblank_period;
 	}
 
 	return next;
@@ -775,6 +786,12 @@ uint64_t NV2ADevice::ptimer_tick(uint64_t now)
 		uint64_t next = m_nv2a_state->ptimer_last + ptimer_period;
 
 		if (now >= next) {
+			// Advance by period to keep schedule locked, same as vblank_tick.
+			m_nv2a_state->ptimer_last += ptimer_period;
+			if (now >= m_nv2a_state->ptimer_last + ptimer_period) {
+				m_nv2a_state->ptimer_last = now;
+			}
+
 			if (!m_nv2a_state->exiting) [[likely]] {
 				m_nv2a_state->ptimer.pending_interrupts |= NV_PTIMER_INTR_0_ALARM;
 				update_irq(m_nv2a_state);
@@ -785,8 +802,7 @@ uint64_t NV2ADevice::ptimer_tick(uint64_t now)
 				extern void KeSignalVBlankPending();
 				KeSignalVBlankPending();
 			}
-			m_nv2a_state->ptimer_last = now;
-			return now + ptimer_period;
+			return m_nv2a_state->ptimer_last + ptimer_period;
 		}
 
 		return next;

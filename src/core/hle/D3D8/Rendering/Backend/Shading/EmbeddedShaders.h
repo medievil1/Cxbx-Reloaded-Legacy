@@ -16,6 +16,7 @@
 #include "cso_CxbxFixedFunctionVS.h"
 #include "cso_CxbxBlitVS.h"
 #include "cso_CxbxBlitPS.h"
+#include "cso_CxbxBlitYUY2PS.h"
 #include "cso_CxbxPointSpriteGS.h"
 #include "cso_CxbxThickLineGS.h"
 #include "cso_CxbxUnswizzleCS.h"
@@ -39,6 +40,7 @@ inline bool GetEmbeddedShaderData(const char* name, const void** ppData, size_t*
         { "CxbxFixedFunctionVS",  cso_CxbxFixedFunctionVS,  cso_CxbxFixedFunctionVS_size },
         { "CxbxBlitVS",           cso_CxbxBlitVS,           cso_CxbxBlitVS_size },
         { "CxbxBlitPS",           cso_CxbxBlitPS,           cso_CxbxBlitPS_size },
+        { "CxbxBlitYUY2PS",       cso_CxbxBlitYUY2PS,       cso_CxbxBlitYUY2PS_size },
         { "CxbxPointSpriteGS",   cso_CxbxPointSpriteGS,   cso_CxbxPointSpriteGS_size },
         { "CxbxThickLineGS",     cso_CxbxThickLineGS,     cso_CxbxThickLineGS_size },
         { "CxbxUnswizzleCS",     cso_CxbxUnswizzleCS,     cso_CxbxUnswizzleCS_size },

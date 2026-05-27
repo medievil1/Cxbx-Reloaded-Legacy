@@ -590,6 +590,7 @@ set(SHADER_SOURCES
     CxbxFixedFunctionVertexShader.hlsl
     CxbxBlitVS.hlsl
     CxbxBlitPS.hlsl
+    CxbxBlitYUY2PS.hlsl
     CxbxPointSpriteGS.hlsl
     CxbxThickLineGS.hlsl
     CxbxUnswizzleCS.hlsl
@@ -604,6 +605,7 @@ set(SHADER_PROFILES
     vs_5_0
     vs_5_0
     vs_5_0
+    ps_5_0
     ps_5_0
     gs_5_0
     gs_5_0
@@ -620,6 +622,7 @@ set(SHADER_ARRAY_NAMES
     cso_CxbxFixedFunctionVS
     cso_CxbxBlitVS
     cso_CxbxBlitPS
+    cso_CxbxBlitYUY2PS
     cso_CxbxPointSpriteGS
     cso_CxbxThickLineGS
     cso_CxbxUnswizzleCS

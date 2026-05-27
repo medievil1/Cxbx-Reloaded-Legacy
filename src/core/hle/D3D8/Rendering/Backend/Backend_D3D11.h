@@ -370,6 +370,7 @@ extern EmuD3D8CreateDeviceProxyData  g_EmuCDPD;
 HRESULT CxbxSetRenderTarget(ID3D11Texture2D* pHostRenderTarget, UINT mipSlice = 0, UINT arraySlice = 0);
 void    CxbxSetViewport(D3D11_VIEWPORT *pHostViewport);
 HRESULT CxbxBltSurface(ID3D11Texture2D* pSrc, const RECT* pSrcRect, ID3D11Texture2D* pDst, const RECT* pDstRect, D3DTEXTUREFILTERTYPE Filter);
+HRESULT CxbxBltSurfaceYUY2(ID3D11Texture2D* pSrcYUY2, UINT srcPixelWidth, const RECT* pSrcRect, ID3D11Texture2D* pDst, const RECT* pDstRect);
 void    CxbxSetDepthStencilSurface(ID3D11Texture2D* pHostDepthStencil);
 ID3D11Texture2D* CxbxGetCurrentRenderTarget(); // Returns current RT (non-owning pointer)
 HRESULT CxbxGetBackBuffer(ID3D11Texture2D** ppBackBuffer); // Returns back buffer (caller owns ref)
