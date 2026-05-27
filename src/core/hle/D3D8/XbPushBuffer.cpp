@@ -529,28 +529,23 @@ static void D3D11_flip_stall(NV2AState *d)
 			if (destRect.bottom > (LONG)g_HostBackBufferDesc.Height)
 				destRect.bottom = (LONG)g_HostBackBufferDesc.Height;
 
-			// Reallocate overlay texture only when the current one is too small.
-			// Use R8G8_B8G8_UNORM to store raw YUY2 data — conversion to ARGB
-			// happens in the pixel shader during compositing, eliminating the
-			// 1.2ms CPU conversion cost.
-			UINT yuy2TexWidth = overlayWidth / 2; // YUY2 packs 2 pixels per 4-byte macroblock
-			if (yuy2TexWidth < 1) yuy2TexWidth = 1;
-			if (yuy2TexWidth > g_OverlayTexWidth || overlayHeight > g_OverlayTexHeight) {
+			// Reallocate overlay texture only when the current one is too small
+			if (overlayWidth > g_OverlayTexWidth || overlayHeight > g_OverlayTexHeight) {
 				if (g_pOverlayTex) { g_pOverlayTex->Release(); g_pOverlayTex = nullptr; }
 
 				D3D11_TEXTURE2D_DESC texDesc = {};
-				texDesc.Width = yuy2TexWidth;
+				texDesc.Width = overlayWidth;
 				texDesc.Height = overlayHeight;
 				texDesc.MipLevels = 1;
 				texDesc.ArraySize = 1;
-				texDesc.Format = DXGI_FORMAT_R8G8_B8G8_UNORM;
+				texDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
 				texDesc.SampleDesc.Count = 1;
 				texDesc.Usage = D3D11_USAGE_DYNAMIC;
 				texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
 				texDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
 
 				g_pD3DDevice->CreateTexture2D(&texDesc, nullptr, &g_pOverlayTex);
-				g_OverlayTexWidth = yuy2TexWidth;
+				g_OverlayTexWidth = overlayWidth;
 				g_OverlayTexHeight = overlayHeight;
 			}
 
@@ -563,26 +558,21 @@ static void D3D11_flip_stall(NV2AState *d)
 				LOG_TEST_CASE("PVIDEO destination color key enabled");
 			}
 
-			// Upload raw YUY2 bytes — conversion to ARGB is done on the GPU
-			// via CxbxBltSurfaceYUY2 with a custom pixel shader.
+			// Map texture, convert YUY2→ARGB directly into GPU memory, unmap
 			if (g_pOverlayTex) {
 				D3D11_MAPPED_SUBRESOURCE mapped;
 				HRESULT hr = g_pD3DDeviceContext->Map(g_pOverlayTex, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped);
 				if (SUCCEEDED(hr)) {
-					// Copy raw YUY2 rows; if RowPitch matches overlayPitch, memcpy is a single call
-					if (mapped.RowPitch == overlayPitch) {
-						memcpy(mapped.pData, pOverlayData, overlayPitch * overlayHeight);
-					} else {
-						const uint8_t *pSrcRow = pOverlayData;
-						uint8_t *pDstRow = (uint8_t *)mapped.pData;
-						for (UINT row = 0; row < overlayHeight; row++) {
-							memcpy(pDstRow, pSrcRow, overlayPitch);
-							pSrcRow += overlayPitch;
-							pDstRow += mapped.RowPitch;
-						}
+					const uint8_t *pSrcRow = pOverlayData;
+					uint8_t *pDstRow = (uint8_t *)mapped.pData;
+					for (UINT row = 0; row < overlayHeight; row++) {
+						____YUY2ToARGBRow_C(pSrcRow, pDstRow, overlayWidth);
+						pSrcRow += overlayPitch;
+						pDstRow += mapped.RowPitch;
 					}
 					g_pD3DDeviceContext->Unmap(g_pOverlayTex, 0);
-					CxbxBltSurfaceYUY2(g_pOverlayTex, overlayWidth, nullptr, pHostBackBuffer, &destRect);
+					RECT srcRect = { 0, 0, (LONG)overlayWidth, (LONG)overlayHeight };
+					CxbxBltSurface(g_pOverlayTex, &srcRect, pHostBackBuffer, &destRect, D3DTEXF_LINEAR);
 				}
 			}
 		}

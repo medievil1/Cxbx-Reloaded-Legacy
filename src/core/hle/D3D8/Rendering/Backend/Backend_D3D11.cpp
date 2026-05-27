@@ -117,7 +117,6 @@ UINT          g_D3D11VSConstantsDirtyMax = CXBX_D3D11_VS_CB_COUNT; // full uploa
 // ******************************************************************
 ID3D11VertexShader  *g_pD3D11BlitVS = nullptr;
 ID3D11PixelShader   *g_pD3D11BlitPS = nullptr;
-ID3D11PixelShader   *g_pD3D11BlitYUY2PS = nullptr;
 ID3D11SamplerState  *g_pD3D11BlitSamplerLinear = nullptr;
 ID3D11SamplerState  *g_pD3D11BlitSamplerPoint = nullptr;
 
@@ -510,18 +509,6 @@ void CxbxD3D11InitBlit()
 		return;
 	}
 
-	// Load precompiled YUY2 → ARGB pixel shader
-	ID3DBlob* pYUY2Blob = nullptr;
-	if (!LoadPrecompiledCSO("CxbxBlitYUY2PS", &pYUY2Blob)) {
-		EmuLog(LOG_LEVEL::WARNING, "CxbxD3D11InitBlit: Failed to load YUY2 blit PS CSO");
-	} else {
-		hr = g_pD3DDevice->CreatePixelShader(pYUY2Blob->GetBufferPointer(), pYUY2Blob->GetBufferSize(), nullptr, &g_pD3D11BlitYUY2PS);
-		pYUY2Blob->Release();
-		if (FAILED(hr)) {
-			EmuLog(LOG_LEVEL::WARNING, "CxbxD3D11InitBlit: Failed to create YUY2 blit PS");
-		}
-	}
-
 	// Create linear sampler
 	D3D11_SAMPLER_DESC sd = {};
 	sd.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
@@ -837,7 +824,6 @@ void CxbxD3D11ReleaseBackendResources()
 	if (g_pD3D11VSConstantBuffer) { g_pD3D11VSConstantBuffer->Release(); g_pD3D11VSConstantBuffer = nullptr; }
 	if (g_pD3D11BlitVS) { g_pD3D11BlitVS->Release(); g_pD3D11BlitVS = nullptr; }
 	if (g_pD3D11BlitPS) { g_pD3D11BlitPS->Release(); g_pD3D11BlitPS = nullptr; }
-	if (g_pD3D11BlitYUY2PS) { g_pD3D11BlitYUY2PS->Release(); g_pD3D11BlitYUY2PS = nullptr; }
 	if (g_pD3D11BlitSamplerLinear) { g_pD3D11BlitSamplerLinear->Release(); g_pD3D11BlitSamplerLinear = nullptr; }
 	if (g_pD3D11BlitSamplerPoint) { g_pD3D11BlitSamplerPoint->Release(); g_pD3D11BlitSamplerPoint = nullptr; }
 	if (g_pD3D11PointSpriteGS) { g_pD3D11PointSpriteGS->Release(); g_pD3D11PointSpriteGS = nullptr; }
