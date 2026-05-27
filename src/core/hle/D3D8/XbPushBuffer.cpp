@@ -488,16 +488,24 @@ static void D3D11_flip_stall(NV2AState *d)
 
 			// --- Overlay presentation rate instrumentation ---
 			// Logs how many VBlanks present the same frame vs. a new frame.
+			// Uses content-only hash (not buffer address) to avoid false
+			// positives from double-buffered overlay buffer swaps.
 			{
 				static int s_overlay_vblank_count = 0;
 				static int s_overlay_new_frame_count = 0;
 				static uint32_t s_last_frame_id = 0;
 
 				s_overlay_vblank_count++;
-				// Fast frame identity: first + last 32-bit word of the overlay buffer
-				uint32_t frame_id = (uint32_t)(uintptr_t)pOverlayData;
-				frame_id ^= *(uint32_t *)pOverlayData;
-				frame_id ^= *(uint32_t *)(pOverlayData + overlayPitch * (overlayHeight - 1) + overlayPitch - 4);
+				// Hash: 8 evenly-spaced 32-bit samples across the frame
+				uint32_t frame_id = 0;
+				if (overlayHeight > 0) {
+					uint32_t stride = (overlayHeight > 1) ? (overlayHeight - 1) : 1;
+					for (int i = 0; i < 8; i++) {
+						uint32_t row = (stride * i) / 7;
+						uint32_t col = (overlayPitch > 4) ? ((overlayPitch - 4) * i / 7) : 0;
+						frame_id ^= *(uint32_t *)(pOverlayData + row * overlayPitch + col);
+					}
+				}
 
 				if (frame_id != s_last_frame_id) {
 					s_last_frame_id = frame_id;
