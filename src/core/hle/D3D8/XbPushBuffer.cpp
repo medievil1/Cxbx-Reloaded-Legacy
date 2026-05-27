@@ -486,6 +486,34 @@ static void D3D11_flip_stall(NV2AState *d)
 
 			uint8_t *pOverlayData = (uint8_t *)(CONTIGUOUS_MEMORY_BASE + pvideo_base + pvideo_offset);
 
+			// --- Overlay presentation rate instrumentation ---
+			// Logs how many VBlanks present the same frame vs. a new frame.
+			{
+				static int s_overlay_vblank_count = 0;
+				static int s_overlay_new_frame_count = 0;
+				static uint32_t s_last_frame_id = 0;
+
+				s_overlay_vblank_count++;
+				// Fast frame identity: first + last 32-bit word of the overlay buffer
+				uint32_t frame_id = (uint32_t)(uintptr_t)pOverlayData;
+				frame_id ^= *(uint32_t *)pOverlayData;
+				frame_id ^= *(uint32_t *)(pOverlayData + overlayPitch * (overlayHeight - 1) + overlayPitch - 4);
+
+				if (frame_id != s_last_frame_id) {
+					s_last_frame_id = frame_id;
+					s_overlay_new_frame_count++;
+				}
+
+				if (s_overlay_vblank_count >= 60) {
+					EmuLog(LOG_LEVEL::INFO, "OverlayRate: %d new frames / %d VBlanks = %.1f fps",
+						s_overlay_new_frame_count, s_overlay_vblank_count,
+						(float)s_overlay_new_frame_count * 60.0f / (float)s_overlay_vblank_count);
+					s_overlay_vblank_count = 0;
+					s_overlay_new_frame_count = 0;
+				}
+			}
+			// --- End overlay rate instrumentation ---
+
 			// Calculate output rectangle (PVIDEO coordinates → host backbuffer)
 			int out_x = GET_MASK(pvideo_point_out, NV_PVIDEO_POINT_OUT_X);
 			int out_y = GET_MASK(pvideo_point_out, NV_PVIDEO_POINT_OUT_Y);
