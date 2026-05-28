@@ -275,16 +275,17 @@ long WINAPI lleException(EXCEPTION_POINTERS *e)
 	{
 		static int64_t s_exception_count = 0;
 		static int64_t s_last_log_ts = 0;
+		static FILE* s_diag_file = nullptr;
+		if (!s_diag_file) s_diag_file = fopen("C:\\temp\\cxbx_diag.txt", "a");
 		InterlockedIncrement64(&s_exception_count);
 		::LARGE_INTEGER now;
 		QueryPerformanceCounter(&now);
 		int64_t elapsed = now.QuadPart - s_last_log_ts;
-		if (elapsed > HostQPCFrequency) { // log every ~1 second
+		if (elapsed > HostQPCFrequency && s_diag_file) { // log every ~1 second
 			int64_t count = InterlockedExchange64(&s_exception_count, 0);
 			s_last_log_ts = now.QuadPart;
-			char msg[128];
-			snprintf(msg, sizeof(msg), "VEH exceptions: %lld/sec\n", count);
-			OutputDebugStringA(msg);
+			fprintf(s_diag_file, "VEH exceptions: %lld/sec\n", count);
+			fflush(s_diag_file);
 		}
 	}
 

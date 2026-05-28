@@ -519,11 +519,14 @@ static void D3D11_flip_stall(NV2AState *d)
 				}
 
 				if (s_overlay_vblank_count >= 60) {
-					char buf[80];
-					snprintf(buf, sizeof(buf), "OverlayRate: %d new frames / %d VBlanks = %.1f fps\n",
-						s_overlay_new_frame_count, s_overlay_vblank_count,
-						(float)s_overlay_new_frame_count * 60.0f / (float)s_overlay_vblank_count);
-					OutputDebugStringA(buf);
+					static FILE* s_diag = nullptr;
+					if (!s_diag) s_diag = fopen("C:\\temp\\cxbx_diag.txt", "a");
+					if (s_diag) {
+						fprintf(s_diag, "OverlayRate: %d new frames / %d VBlanks = %.1f fps\n",
+							s_overlay_new_frame_count, s_overlay_vblank_count,
+							(float)s_overlay_new_frame_count * 60.0f / (float)s_overlay_vblank_count);
+						fflush(s_diag);
+					}
 					s_overlay_vblank_count = 0;
 					s_overlay_new_frame_count = 0;
 				}
