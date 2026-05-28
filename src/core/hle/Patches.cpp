@@ -501,6 +501,8 @@ std::map<const std::string, const xbox_patch_t> g_PatchTable = {
 	//PATCH_ENTRY("timeSetEvent", xbox::EMUPATCH(timeSetEvent), PATCH_ALWAYS),
 	PATCH_ENTRY("XReadMUMetaData", xbox::EMUPATCH(XReadMUMetaData), PATCH_ALWAYS),
 	PATCH_ENTRY("XUnmountMU", xbox::EMUPATCH(XUnmountMU), PATCH_ALWAYS),
+	PATCH_ENTRY("QueryPerformanceCounter", xbox::EMUPATCH(QueryPerformanceCounter), PATCH_ALWAYS),
+	PATCH_ENTRY("QueryPerformanceFrequency", xbox::EMUPATCH(QueryPerformanceFrequency), PATCH_ALWAYS),
 
 	// JVS Functions
 	PATCH_ENTRY("JVS_SendCommand", xbox::EMUPATCH(JVS_SendCommand), PATCH_ALWAYS),
@@ -627,6 +629,19 @@ void EmuInstallPatches()
 {
 	for (const auto& it : g_SymbolAddresses) {
 		EmuInstallPatch(it.first, it.second);
+	}
+
+	// QueryPerformanceFrequency sits immediately after QueryPerformanceCounter
+	// in the XAPILIB section (17 bytes apart in all known XDK versions).
+	// The OOVPA database has a signature for the counter but not the frequency;
+	// derive the frequency address and register it so the HLE patch applies.
+	{
+		auto qpc = g_SymbolAddresses.find("QueryPerformanceCounter");
+		if (qpc != g_SymbolAddresses.end()) {
+			xbox::addr_xt freqAddr = qpc->second + 17;
+			g_SymbolAddresses["QueryPerformanceFrequency"] = freqAddr;
+			EmuInstallPatch("QueryPerformanceFrequency", freqAddr);
+		}
 	}
 
 	LookupTrampolinesD3D();

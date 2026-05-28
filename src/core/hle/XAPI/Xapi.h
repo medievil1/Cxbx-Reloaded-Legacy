@@ -626,6 +626,14 @@ xbox::bool_xt WINAPI EMUPATCH(QueryPerformanceCounter)
 );
 
 // ******************************************************************
+// * patch: QueryPerformanceFrequency
+// ******************************************************************
+xbox::bool_xt WINAPI EMUPATCH(QueryPerformanceFrequency)
+(
+	LARGE_INTEGER *lpFrequency
+);
+
+// ******************************************************************
 // * patch: QueueUserAPC
 // ******************************************************************
 xbox::dword_xt WINAPI EMUPATCH(QueueUserAPC)

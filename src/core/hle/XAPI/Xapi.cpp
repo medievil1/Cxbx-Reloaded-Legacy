@@ -28,6 +28,7 @@
 #define LOG_PREFIX CXBXR_MODULE::XAPI
 
 #include <core\kernel\exports\xboxkrnl.h>
+#include <common/Timer.h> // For CxbxGetPerformanceCounter, XBOX_TSC_FREQUENCY
 #include "core\hle\XAPI\Xapi.h"
 #include "common/cxbxr.hpp"
 
@@ -1154,6 +1155,40 @@ xbox::dword_xt WINAPI xbox::EMUPATCH(XReadMUMetaData)
 	}
 
 	RETURN(RtlNtStatusToDosError(status));
+}
+
+// ******************************************************************
+// * patch: QueryPerformanceCounter (XAPI)
+// ******************************************************************
+// The XAPI version uses RDTSC (TSC-based, 733MHz) unlike the kernel
+// KeQueryPerformanceCounter which runs at the ACPI clock (3.58MHz).
+xbox::bool_xt WINAPI xbox::EMUPATCH(QueryPerformanceCounter)
+(
+	xbox::LARGE_INTEGER *lpPerformanceCount
+)
+{
+	if (lpPerformanceCount) {
+		lpPerformanceCount->QuadPart = CxbxGetPerformanceCounter(false); // TSC frequency
+	}
+	return TRUE;
+}
+
+// ******************************************************************
+// * patch: QueryPerformanceFrequency (XAPI)
+// ******************************************************************
+// Must match QueryPerformanceCounter's TSC rate (733,333,333 Hz).
+// If unpatched, the game calls KeQueryPerformanceFrequency which
+// returns ACPI (3,579,545 Hz) — a 200x mismatch that corrupts all
+// timing calculations in XMV audio/video decode.
+xbox::bool_xt WINAPI xbox::EMUPATCH(QueryPerformanceFrequency)
+(
+	xbox::LARGE_INTEGER *lpFrequency
+)
+{
+	if (lpFrequency) {
+		lpFrequency->QuadPart = XBOX_TSC_FREQUENCY; // 733,333,333
+	}
+	return TRUE;
 }
 
 
