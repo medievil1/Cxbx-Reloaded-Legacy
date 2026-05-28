@@ -38,6 +38,7 @@
 #include "devices\usb\OHCI.h"
 #include "core\hle\DSOUND\DirectSound\DirectSoundGlobal.hpp"
 #include "core\hle\D3D8\Rendering\Backend\Backend_D3D11_Profiler.h"
+#include "common\win32\Threads.h"
 
 
 std::atomic_uint64_t HostLastQPC; // last absolute host QPC reading
@@ -184,6 +185,11 @@ static uint64_t dispatch_periodic_events(uint64_t now)
 xbox::void_xt NTAPI system_events(xbox::PVOID arg)
 {
 	SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL);
+
+	// Pin system_events to non-Xbox cores so it never preempts game threads
+	// (pinned to CPU 0).  This prevents the VBlank/DSound worker from stealing
+	// CPU time from the WMV2 decoder during video playback.
+	g_AffinityPolicy->SetAffinityOther();
 
 	// Run at DPC level to prevent this thread from executing APCs/DPCs
 	xbox::KeRaiseIrqlToDpcLevel();
