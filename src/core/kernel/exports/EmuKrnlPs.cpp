@@ -447,6 +447,13 @@ XBSYSAPI EXPORTNUM(255) xbox::ntstatus_xt NTAPI xbox::PsCreateSystemThreadEx
 		eThread->Tcb.Priority = GetThreadPriority(handle);
 		g_AffinityPolicy->SetAffinityXbox(handle);
 
+		// Boost Xbox game threads to ABOVE_NORMAL so they compete fairly
+		// with the system_events thread (also ABOVE_NORMAL). Without this,
+		// game threads at NORMAL starve when system_events hogs CPU during
+		// video decode (DSound worker + VBlank delivery).
+		SetThreadPriority(handle, THREAD_PRIORITY_ABOVE_NORMAL);
+		eThread->Tcb.Priority = THREAD_PRIORITY_ABOVE_NORMAL;
+
 		// Wait for the initialization of the remaining thread state
 		KeSuspendThreadEx(&eThread->Tcb);
 		ResumeThread(handle);

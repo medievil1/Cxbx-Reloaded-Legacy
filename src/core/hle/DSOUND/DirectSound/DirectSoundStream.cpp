@@ -123,6 +123,21 @@ xbox::X_CDirectSoundStream::X_CDirectSoundStream(bool is3D) : Xb_Voice(is3D)
 // ******************************************************************
 void DirectSoundDoWork_Stream(xbox::LARGE_INTEGER& time)
 {
+    // One-time diagnostic: log the thread priority for the decoder thread
+    {
+        static bool s_logged = false;
+        if (!s_logged) {
+            s_logged = true;
+            int pri = GetThreadPriority(GetCurrentThread());
+            static FILE* s_diag = nullptr;
+            if (!s_diag) s_diag = fopen("C:\\temp\\cxbx_prio.txt", "a");
+            if (s_diag) {
+                fprintf(s_diag, "Stream thread priority: %d (0=normal, 1=above_normal, 2=highest)\n", pri);
+                fflush(s_diag);
+            }
+        }
+    }
+
     // Actually, DirectSoundStream need to process buffer packets here.
     vector_ds_stream::iterator ppDSStream = g_pDSoundStreamCache.begin();
     for (; ppDSStream != g_pDSoundStreamCache.end(); ppDSStream++) {
