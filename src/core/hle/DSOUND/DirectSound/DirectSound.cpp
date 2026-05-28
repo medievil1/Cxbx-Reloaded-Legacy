@@ -347,7 +347,13 @@ xbox::void_xt WINAPI xbox::EMUPATCH(DirectSoundDoWork)()
         return;
     }
 
-	LOG_FUNC();
+	//LOG_FUNC();
+
+    // --- Diagnostic: measure DirectSoundDoWork duration on video thread ---
+    static int s_dowork_call_count = 0;
+    static LONGLONG s_dowork_total_ticks = 0;
+    LARGE_INTEGER dowork_start;
+    QueryPerformanceCounter(&dowork_start);
 
     xbox::LARGE_INTEGER getTime;
     xbox::KeQuerySystemTime(&getTime);
@@ -356,6 +362,20 @@ xbox::void_xt WINAPI xbox::EMUPATCH(DirectSoundDoWork)()
 
     // Actually, DirectSoundStream need to process buffer packets here.
     DirectSoundDoWork_Stream(getTime);
+
+    LARGE_INTEGER dowork_end;
+    QueryPerformanceCounter(&dowork_end);
+    s_dowork_total_ticks += dowork_end.QuadPart - dowork_start.QuadPart;
+    s_dowork_call_count++;
+    if (s_dowork_call_count >= 60) {
+        double avgMs = (double)s_dowork_total_ticks / (double)s_dowork_call_count
+                       * 1000.0 / (double)HostQPCFrequency;
+        EmuLog(LOG_LEVEL::INFO, "DoWorkProf: %d calls, avg %.3f ms, total %.1f ms",
+            s_dowork_call_count, avgMs,
+            (double)s_dowork_total_ticks * 1000.0 / (double)HostQPCFrequency);
+        s_dowork_call_count = 0;
+        s_dowork_total_ticks = 0;
+    }
 
     return;
 }
