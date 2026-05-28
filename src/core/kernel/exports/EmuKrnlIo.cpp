@@ -1072,6 +1072,16 @@ xbox::ntstatus_xt NTAPI xbox::IopParseDevice(
 	// Test case: JSRF
 	OpenPacket->CreateOptions &= (~FILE_NO_INTERMEDIATE_BUFFERING);
 
+	// When the game opens a file with overlapped I/O for reading (e.g. XMV
+	// video streaming), add FILE_FLAG_SEQUENTIAL_SCAN so Windows aggressively
+	// read-aheads.  Without this, each async read may stall until the cache
+	// manager fetches from disk, causing 1fps decode on cold cache that
+	// slowly ramps to 15fps as the file is progressively cached.
+	if ((OpenPacket->CreateOptions & FILE_FLAG_OVERLAPPED) &&
+	    (OpenPacket->DesiredAccess & GENERIC_READ)) {
+		OpenPacket->CreateOptions |= FILE_FLAG_SEQUENTIAL_SCAN;
+	}
+
 	// TODO: After move support down to irp driver / file system. Verify if we still need to force override.
 	// Testcase:
 	//  * Grand Theft Auto (series) - Always reformat partition, without this will not be able to reformat it.
