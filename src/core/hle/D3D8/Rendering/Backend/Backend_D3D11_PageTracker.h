@@ -187,5 +187,7 @@ void CxbxPageTrackerClearTextureDirty(uint32_t offset, uint32_t size);
 // written to the WC/tiled mapping (0xF0000000) are visible at the
 // contiguous address (0x80000000) where the overlay reader expects them.
 void CxbxSyncTiledRangeToContiguous(uint32_t startOffset, uint32_t size);
+void CxbxPageTrackerPinOverlayRange(uint32_t startOffset, uint32_t size);
+void CxbxPageTrackerUnpinOverlayRange();
 
 #endif // BACKEND_D3D11_PAGE_TRACKER_H

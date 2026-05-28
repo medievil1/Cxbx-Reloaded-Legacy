@@ -121,6 +121,24 @@ static uint32_t s_TiledCommittedBitmap[BITMAP_DWORDS] = {};
 // Quick flag: true when any tiled page is committed (avoids scanning bitmap)
 static bool s_bHasTiledPages = false;
 
+// Pinned overlay buffer range — pages in this range are never decommitted
+// by SyncTiledPagesBack, keeping the WC mapping hot for the video decoder.
+static uint32_t s_pinnedFirstPage = 0;
+static uint32_t s_pinnedLastPage = 0;
+
+void CxbxPageTrackerPinOverlayRange(uint32_t startOffset, uint32_t size)
+{
+	if (size == 0) return;
+	s_pinnedFirstPage = startOffset / PAGE_SIZE_;
+	s_pinnedLastPage = (startOffset + size - 1) / PAGE_SIZE_;
+}
+
+void CxbxPageTrackerUnpinOverlayRange()
+{
+	s_pinnedFirstPage = 0;
+	s_pinnedLastPage = 0;
+}
+
 // Frame boundary flag: true for the first flush after Present.
 // Only the first flush of a frame may use MAP_WRITE_DISCARD (which orphans
 // the buffer). Subsequent mid-frame flushes use MAP_WRITE_NO_OVERWRITE so
@@ -405,6 +423,14 @@ static void SyncTiledPagesBack()
 			// (this write is automatically tracked by MEM_WRITE_WATCH)
 			memcpy((void*)(CONTIG_BASE + offset),
 			       (void*)(TILED_BASE + offset), PAGE_SIZE_);
+
+			// Skip decommit for pages in the pinned overlay buffer range.
+			// The video decoder writes frames through the WC mapping;
+			// decommitting forces 150+ page faults per frame.
+			if (s_pinnedFirstPage > 0 && s_pinnedLastPage > 0 &&
+			    pageIdx >= s_pinnedFirstPage && pageIdx <= s_pinnedLastPage) {
+				continue; // keep committed, don't decommit
+			}
 
 			// Decommit — returns to MEM_RESERVE + PAGE_NOACCESS, faults again on next access
 			VirtualFree((void*)(TILED_BASE + offset), PAGE_SIZE_, MEM_DECOMMIT);

@@ -60,6 +60,7 @@ void CxbxReleaseOverlayResources()
 	g_OverlayTexWidth = 0;
 	g_OverlayTexHeight = 0;
 	if (g_pOverlayTex) { g_pOverlayTex->Release(); g_pOverlayTex = nullptr; }
+	CxbxPageTrackerUnpinOverlayRange();
 }
 
 const char *NV2AMethodToString(DWORD dwMethod); // forward
@@ -483,6 +484,10 @@ static void D3D11_flip_stall(NV2AState *d)
 			uint32_t overlayPhysAddr = pvideo_base + pvideo_offset;
 			uint32_t overlayBytes = overlayPitch * overlayHeight;
 			CxbxSyncTiledRangeToContiguous(overlayPhysAddr, overlayBytes);
+			// Pin these pages so SyncTiledPagesBack keeps them committed.
+			// The video decoder writes through the WC (0xF0000000) mapping;
+			// decommitting forces ~150 page faults per frame.
+			CxbxPageTrackerPinOverlayRange(overlayPhysAddr, overlayBytes);
 
 			uint8_t *pOverlayData = (uint8_t *)(CONTIGUOUS_MEMORY_BASE + pvideo_base + pvideo_offset);
 
