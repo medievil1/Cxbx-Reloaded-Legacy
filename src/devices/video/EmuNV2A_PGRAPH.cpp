@@ -224,9 +224,8 @@ static void pgraph_rdi_write(PGRAPHState *pg,
                 pg->xf.xfctx[idx][slot] = val;
                 pg->xf.xfctx_dirty[idx / 32] |= (1u << (idx % 32));
                 pg->xf.xfctx_generation++;
-				}
-				skip_flip_stall:;
-			}
+            }
+        }
         break;
     default:
         NV2A_DPRINTF("unknown rdi write select 0x%x, address 0x%x, val 0x%08x\n",
@@ -665,41 +664,26 @@ void pgraph_handle_method(NV2AState *d,
 				qemu_mutex_lock(&d->pgraph.pgraph_lock);
 			}
 
-			// VBlank-gated frame pacing for overlay compositing.
-			// Use the same vblank_period as the VBlank interrupt timer so
-			// the overlay flip is phase-locked to the actual VBlank cycle.
-			// Anchor tracks the ideal VBlank schedule; SleepPrecise yields
-			// until the next VBlank deadline and advances by one period.
+			// VBlank-gated frame pacing: wait until the next VBlank deadline.
+			// Advance the anchor by the period (rather than using the wake QPC)
+			// to keep the schedule locked to the ideal frame cadence even when
+			// SleepPrecise wakes slightly late.  Only resync to the wake QPC if
+			// we fell behind by multiple periods (e.g. after a system stall).
 			{
 				static int64_t s_flipStallAnchor = 0;
+				// Use the same vblank_period as the VBlank interrupt timer so
+				// the overlay flip is phase-locked to the actual VBlank cycle.
 				int64_t vblankPeriodTicks = d->vblank_period;
-				if (vblankPeriodTicks <= 0) {
-					qemu_mutex_unlock(&d->pgraph.pgraph_lock);
-					qemu_mutex_lock(&d->pgraph.pgraph_lock);
-				} else {
-					// Seed anchor from the real VBlank timestamp on first call.
-					if (s_flipStallAnchor == 0) {
-						s_flipStallAnchor = d->vblank_last_qpc.load(std::memory_order_acquire);
-					}
 
-					if (s_flipStallAnchor > 0) {
-						int64_t nextVBlankQPC = s_flipStallAnchor + vblankPeriodTicks;
-						qemu_mutex_unlock(&d->pgraph.pgraph_lock);
-						int64_t wakeQPC = SleepPrecise(nextVBlankQPC);
-						qemu_mutex_lock(&d->pgraph.pgraph_lock);
-
-						// Advance anchor by one period to maintain ideal cadence.
-						s_flipStallAnchor += vblankPeriodTicks;
-						if (wakeQPC > s_flipStallAnchor + vblankPeriodTicks) {
-							s_flipStallAnchor = wakeQPC;
-						}
-					}
-				}
-			}
-
-				// Seed anchor from the real VBlank timestamp on first call.
+				// Seed anchor from the real VBlank timestamp on first call,
+				// or reseed if it's fallen too far behind (e.g. after a stall).
+				int64_t lastVBlank = d->vblank_last_qpc.load(std::memory_order_acquire);
 				if (s_flipStallAnchor == 0) {
-					s_flipStallAnchor = d->vblank_last_qpc.load(std::memory_order_acquire);
+					LARGE_INTEGER now;
+					QueryPerformanceCounter(&now);
+					if (now.QuadPart - lastVBlank > vblankPeriodTicks * 2) {
+						s_flipStallAnchor = lastVBlank;
+					}
 				}
 
 				if (s_flipStallAnchor > 0) {
@@ -710,6 +694,7 @@ void pgraph_handle_method(NV2AState *d,
 
 					// Advance anchor by one period to maintain ideal cadence.
 					s_flipStallAnchor += vblankPeriodTicks;
+					// Resync if we fell behind by more than one period.
 					if (wakeQPC > s_flipStallAnchor + vblankPeriodTicks) {
 						s_flipStallAnchor = wakeQPC;
 					}
