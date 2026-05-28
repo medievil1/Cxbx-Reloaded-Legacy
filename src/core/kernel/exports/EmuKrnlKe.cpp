@@ -544,8 +544,7 @@ void InitDpcData()
 	InitializeListHead(&(g_DpcData.DpcQueue));
 }
 
-static constexpr uint32_t XBOX_TSC_FREQUENCY = 733333333; // Xbox Time Stamp Counter Frequency = 733333333 (CPU Clock)
-static constexpr uint32_t XBOX_ACPI_FREQUENCY = 3579545;  // Xbox ACPI timer frequency (3.579545 MHz)
+// XBOX_TSC_FREQUENCY and XBOX_ACPI_FREQUENCY are now #defined in common/Timer.h
 
 ULONGLONG CxbxGetPerformanceCounter(bool acpi)
 {

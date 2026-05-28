@@ -1338,7 +1338,6 @@ bool EmuX86_Opcode_PUSH(LPEXCEPTION_POINTERS e, _DInst& info)
 	return true;
 }
 
-ULONGLONG CxbxGetPerformanceCounter(bool acpi); // implemented in EmuKrnlKe.cpp
 void EmuX86_Opcode_RDTSC(LPEXCEPTION_POINTERS e)
 {
 	// We use CxbxGetPerformanceCounter. KeQueryPerformanceCounter is a differnet frequency and cannot be used!

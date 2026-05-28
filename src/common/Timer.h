@@ -30,6 +30,13 @@
 
 #include <atomic>
 #include <mutex>
+#include <cstdint>
+
+#define XBOX_TSC_FREQUENCY  733333333 // Xbox CPU TSC (733 MHz)
+#define XBOX_ACPI_FREQUENCY 3579545   // Xbox ACPI timer (3.58 MHz)
+
+// Scale host QPC ticks to Xbox counter frequency (TSC if acpi=false, ACPI if true)
+uint64_t CxbxGetPerformanceCounter(bool acpi);
 
 #define SCALE_S_IN_NS  1000000000
 #define SCALE_MS_IN_NS 1000000
