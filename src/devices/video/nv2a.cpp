@@ -739,8 +739,9 @@ uint64_t NV2ADevice::vblank_tick(uint64_t now)
 	NV2AState *d = m_nv2a_state;
 	// ~59.94Hz in QPC ticks: freq * 16667 / 1000000
 	const int64_t vblank_period = d->vblank_period;
+	if (vblank_period <= 0) return UINT64_MAX;
 
-	uint64_t next = d->vblank_last + vblank_period;
+	uint64_t next = d->vblank_last + (uint64_t)vblank_period;
 
 	if (now >= next) {
 		// Advance by one period (rather than resetting to 'now') to keep the

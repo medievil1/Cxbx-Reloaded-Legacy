@@ -224,8 +224,9 @@ static void pgraph_rdi_write(PGRAPHState *pg,
                 pg->xf.xfctx[idx][slot] = val;
                 pg->xf.xfctx_dirty[idx / 32] |= (1u << (idx % 32));
                 pg->xf.xfctx_generation++;
-            }
-        }
+				}
+				skip_flip_stall:;
+			}
         break;
     default:
         NV2A_DPRINTF("unknown rdi write select 0x%x, address 0x%x, val 0x%08x\n",
@@ -672,6 +673,11 @@ void pgraph_handle_method(NV2AState *d,
 			{
 				static int64_t s_flipStallAnchor = 0;
 				int64_t vblankPeriodTicks = d->vblank_period;
+				if (vblankPeriodTicks <= 0) {
+					qemu_mutex_unlock(&d->pgraph.pgraph_lock);
+					qemu_mutex_lock(&d->pgraph.pgraph_lock);
+					goto skip_flip_stall;
+				}
 
 				// Seed anchor from the real VBlank timestamp on first call.
 				if (s_flipStallAnchor == 0) {

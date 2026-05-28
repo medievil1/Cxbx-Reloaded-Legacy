@@ -424,7 +424,7 @@ typedef struct NV2AState {
 	void(* vblank_cb)(void *);
 	uint64_t vblank_last;
 	std::atomic<int64_t> vblank_last_qpc{0}; // QPC timestamp of last VBlank (for PCRTC_RASTER sync)
-	int64_t vblank_period; // QPC ticks per VBlank interval (matches HostQPCFrequency * 16667 / 1000000)
+	int64_t vblank_period = 0; // QPC ticks per VBlank interval (set in NV2A init)
 	std::atomic_flag vblank_pending = ATOMIC_FLAG_INIT; // Set by timer, consumed by main thread
     // PCIDevice dev;
     // qemu_irq irq;
