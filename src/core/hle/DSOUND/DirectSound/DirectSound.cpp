@@ -352,7 +352,7 @@ xbox::void_xt WINAPI xbox::EMUPATCH(DirectSoundDoWork)()
     // --- Diagnostic: measure DirectSoundDoWork duration on video thread ---
     static int s_dowork_call_count = 0;
     static LONGLONG s_dowork_total_ticks = 0;
-    LARGE_INTEGER dowork_start;
+    ::LARGE_INTEGER dowork_start;
     QueryPerformanceCounter(&dowork_start);
 
     xbox::LARGE_INTEGER getTime;
@@ -363,7 +363,7 @@ xbox::void_xt WINAPI xbox::EMUPATCH(DirectSoundDoWork)()
     // Actually, DirectSoundStream need to process buffer packets here.
     DirectSoundDoWork_Stream(getTime);
 
-    LARGE_INTEGER dowork_end;
+    ::LARGE_INTEGER dowork_end;
     QueryPerformanceCounter(&dowork_end);
     s_dowork_total_ticks += dowork_end.QuadPart - dowork_start.QuadPart;
     s_dowork_call_count++;
