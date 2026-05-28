@@ -36,6 +36,7 @@
 #include "Logging.h"
 #include "DirectSoundLogging.hpp"
 #include "..\XbDSoundLogging.hpp"
+#include "common\win32\Threads.h"
 
 #include "DSStream_PacketManager.hpp"
 
@@ -328,6 +329,18 @@ xbox::hresult_xt WINAPI xbox::EMUPATCH(DirectSoundCreateStream)
                 (*ppStream)->Xb_VolumeMixbin, &(*ppStream)->Xb_Voice);
 
             g_pDSoundStreamCache.push_back(*ppStream);
+        }
+    }
+
+    // Unpin the decoder thread from the Xbox core so it doesn't compete
+    // with the game's render loop for CPU time during WMV2 video decode.
+    {
+        static bool s_unpinned = false;
+        if (!s_unpinned) {
+            s_unpinned = true;
+            if (g_AffinityPolicy) {
+                g_AffinityPolicy->SetAffinityOther(GetCurrentThread());
+            }
         }
     }
 
