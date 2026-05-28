@@ -1162,12 +1162,13 @@ xbox::ntstatus_xt NTAPI xbox::IopParseDevice(
 					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
 					NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
 				if (hCache != INVALID_HANDLE_VALUE) {
-					LARGE_INTEGER fileSize;
+					::LARGE_INTEGER fileSize;
 					if (GetFileSizeEx(hCache, &fileSize)) {
 						std::vector<char> buf(1024 * 1024); // 1MB chunk
-						LARGE_INTEGER offset = {};
+						::LARGE_INTEGER offset = {};
 						while (offset.QuadPart < fileSize.QuadPart) {
-							DWORD toRead = (DWORD)min((LONGLONG)buf.size(), fileSize.QuadPart - offset.QuadPart);
+							DWORD toRead = (DWORD)((fileSize.QuadPart - offset.QuadPart) < (LONGLONG)buf.size()
+								? (fileSize.QuadPart - offset.QuadPart) : (LONGLONG)buf.size());
 							DWORD read = 0;
 							ReadFile(hCache, buf.data(), toRead, &read, NULL);
 							if (read == 0) break;
