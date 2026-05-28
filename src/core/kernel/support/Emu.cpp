@@ -272,6 +272,23 @@ bool lleTryHandleException(EXCEPTION_POINTERS *e)
 long WINAPI lleException(EXCEPTION_POINTERS *e)
 {
 	// --- Diagnostic: count exception rate ---
+
+	// Recovery: if the game jumped to an invalid address (corrupted function
+	// pointer), pop the return address from the stack and return from the
+	// faulty CALL instruction.  0xFFFFFF00 and similar high-byte sentinels
+	// are commonly seen when NV2A device-extension fields aren't initialized
+	// before the first DPC fires.
+	if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION
+		&& !IsXboxCodeAddress(e->ContextRecord->Eip)
+		&& e->ContextRecord->Eip > 0x80000000) {
+		xbox::addr_xt badEip = e->ContextRecord->Eip;
+		// Pop the return address that the faulty CALL pushed
+		xbox::addr_xt retAddr = *(xbox::addr_xt*)e->ContextRecord->Esp;
+		e->ContextRecord->Eip = retAddr;
+		e->ContextRecord->Esp += 4;
+		EmuLog(LOG_LEVEL::WARNING, "Recovered from bad EIP 0x%08X -> ret 0x%08X", badEip, retAddr);
+		return EXCEPTION_CONTINUE_EXECUTION;
+	}
 	{
 		static int64_t s_exception_count = 0;
 		static int64_t s_last_log_ts = 0;
