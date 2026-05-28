@@ -676,8 +676,26 @@ void pgraph_handle_method(NV2AState *d,
 				if (vblankPeriodTicks <= 0) {
 					qemu_mutex_unlock(&d->pgraph.pgraph_lock);
 					qemu_mutex_lock(&d->pgraph.pgraph_lock);
-					goto skip_flip_stall;
+				} else {
+					// Seed anchor from the real VBlank timestamp on first call.
+					if (s_flipStallAnchor == 0) {
+						s_flipStallAnchor = d->vblank_last_qpc.load(std::memory_order_acquire);
+					}
+
+					if (s_flipStallAnchor > 0) {
+						int64_t nextVBlankQPC = s_flipStallAnchor + vblankPeriodTicks;
+						qemu_mutex_unlock(&d->pgraph.pgraph_lock);
+						int64_t wakeQPC = SleepPrecise(nextVBlankQPC);
+						qemu_mutex_lock(&d->pgraph.pgraph_lock);
+
+						// Advance anchor by one period to maintain ideal cadence.
+						s_flipStallAnchor += vblankPeriodTicks;
+						if (wakeQPC > s_flipStallAnchor + vblankPeriodTicks) {
+							s_flipStallAnchor = wakeQPC;
+						}
+					}
 				}
+			}
 
 				// Seed anchor from the real VBlank timestamp on first call.
 				if (s_flipStallAnchor == 0) {
