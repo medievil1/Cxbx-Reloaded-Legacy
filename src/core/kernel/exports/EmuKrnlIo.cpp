@@ -40,6 +40,7 @@
 #include "core\kernel\support\EmuFile.h" // For CxbxCreateSymbolicLink(), etc.
 #include "core/kernel/support/NativeHandle.h" // For Xbox objects to native handle and back
 #include "CxbxDebugger.h"
+#include <vector>
 
 static void IopClearStackLocation(IN xbox::PIO_STACK_LOCATION IoStackLocation)
 {
@@ -1150,6 +1151,33 @@ xbox::ntstatus_xt NTAPI xbox::IopParseDevice(
 	}
 
 	if (X_NT_SUCCESS(result)) {
+
+		// Pre-cache .xmv/.wmv video files so the decoder never blocks on I/O.
+		// Without this, synchronous reads stall the decoder thread until the
+		// OS cache manager services each read, causing 1fps cold-cache decode.
+		if (RelativeHostPath.size() >= 4) {
+			std::wstring ext = RelativeHostPath.substr(RelativeHostPath.size() - 4);
+			if (_wcsicmp(ext.c_str(), L".xmv") == 0 || _wcsicmp(ext.c_str(), L".wmv") == 0) {
+				HANDLE hCache = CreateFileW(RelativeHostPath.c_str(), GENERIC_READ,
+					FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+					NULL, OPEN_EXISTING, FILE_FLAG_SEQUENTIAL_SCAN, NULL);
+				if (hCache != INVALID_HANDLE_VALUE) {
+					LARGE_INTEGER fileSize;
+					if (GetFileSizeEx(hCache, &fileSize)) {
+						std::vector<char> buf(1024 * 1024); // 1MB chunk
+						LARGE_INTEGER offset = {};
+						while (offset.QuadPart < fileSize.QuadPart) {
+							DWORD toRead = (DWORD)min((LONGLONG)buf.size(), fileSize.QuadPart - offset.QuadPart);
+							DWORD read = 0;
+							ReadFile(hCache, buf.data(), toRead, &read, NULL);
+							if (read == 0) break;
+							offset.QuadPart += read;
+						}
+					}
+					CloseHandle(hCache);
+				}
+			}
+		}
 
 		// TODO: FileObject fields needs implement in driver's filesystem section. For now, ReadAccess/WriteAccess are not used.
 		RegisterXboxObject(FileObject, FileHandle);
