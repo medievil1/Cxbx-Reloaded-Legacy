@@ -500,6 +500,7 @@ void NV2ADevice::Init()
 	pgraph_init(d);
 
 	d->vblank_last = get_now();
+	d->vblank_period = HostQPCFrequency * 16667 / 1000000;
 	d->vblank_cb = nv2a_vblank_interrupt;
 
     qemu_mutex_init(&d->pfifo.pfifo_lock);
@@ -737,7 +738,7 @@ uint64_t NV2ADevice::vblank_tick(uint64_t now)
 	// that PCRTC can only trigger VBlanks at the NTSC frequency.
 	NV2AState *d = m_nv2a_state;
 	// ~59.94Hz in QPC ticks: freq * 16667 / 1000000
-	const int64_t vblank_period = HostQPCFrequency * 16667 / 1000000;
+	const int64_t vblank_period = d->vblank_period;
 
 	uint64_t next = d->vblank_last + vblank_period;
 
