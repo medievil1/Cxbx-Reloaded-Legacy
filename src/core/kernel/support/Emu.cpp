@@ -38,6 +38,8 @@
 #include "CxbxDebugger.h"
 #include "core\hle\D3D8\Rendering\Backend\Backend_D3D11_Profiler.h"
 #include "core\hle\D3D8\Rendering\Backend\Backend_D3D11_PageTracker.h"
+#include <common/Timer.h>
+#include <cstdio>
 
 #include <Dbghelp.h>
 #include <TlHelp32.h>
@@ -269,6 +271,23 @@ bool lleTryHandleException(EXCEPTION_POINTERS *e)
 // This eliminates the overhead of a separate PageTrackerVEH being called on every exception.
 long WINAPI lleException(EXCEPTION_POINTERS *e)
 {
+	// --- Diagnostic: count exception rate ---
+	{
+		static int64_t s_exception_count = 0;
+		static int64_t s_last_log_ts = 0;
+		InterlockedIncrement64(&s_exception_count);
+		::LARGE_INTEGER now;
+		QueryPerformanceCounter(&now);
+		int64_t elapsed = now.QuadPart - s_last_log_ts;
+		if (elapsed > HostQPCFrequency) { // log every ~1 second
+			int64_t count = InterlockedExchange64(&s_exception_count, 0);
+			s_last_log_ts = now.QuadPart;
+			char msg[128];
+			snprintf(msg, sizeof(msg), "VEH exceptions: %lld/sec\n", count);
+			OutputDebugStringA(msg);
+		}
+	}
+
 	// Fast path: page tracker faults (GPU-dirty pages + tiled memory redirect)
 	if (e->ExceptionRecord->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
 		uintptr_t faultAddr = (uintptr_t)e->ExceptionRecord->ExceptionInformation[1];
