@@ -33,6 +33,7 @@
 #include <dsound.h>
 #include "DirectSoundGlobal.hpp" // Global variables
 #include <common/Timer.h>
+#include <cstdio>
 
 #include "Logging.h"
 #include "DirectSoundLogging.hpp"
@@ -370,9 +371,11 @@ xbox::void_xt WINAPI xbox::EMUPATCH(DirectSoundDoWork)()
     if (s_dowork_call_count >= 60) {
         double avgMs = (double)s_dowork_total_ticks / (double)s_dowork_call_count
                        * 1000.0 / (double)HostQPCFrequency;
-        EmuLog(LOG_LEVEL::INFO, "DoWorkProf: %d calls, avg %.3f ms, total %.1f ms",
+        char buf[128];
+        snprintf(buf, sizeof(buf), "DoWorkProf: %d calls, avg %.3f ms, total %.1f ms\n",
             s_dowork_call_count, avgMs,
             (double)s_dowork_total_ticks * 1000.0 / (double)HostQPCFrequency);
+        OutputDebugStringA(buf);
         s_dowork_call_count = 0;
         s_dowork_total_ticks = 0;
     }

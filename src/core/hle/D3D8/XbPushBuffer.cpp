@@ -29,6 +29,7 @@
 
 #include <assert.h> // For assert()
 #include <cstring>  // For memcpy (type-punning in float depth decode)
+#include <cstdio>
 
 #include "core\kernel\support\Emu.h"
 #include "core\hle\D3D8\XbD3D8Types.h" // For X_D3DFORMAT
@@ -518,9 +519,11 @@ static void D3D11_flip_stall(NV2AState *d)
 				}
 
 				if (s_overlay_vblank_count >= 60) {
-					EmuLog(LOG_LEVEL::INFO, "OverlayRate: %d new frames / %d VBlanks = %.1f fps",
+					char buf[80];
+					snprintf(buf, sizeof(buf), "OverlayRate: %d new frames / %d VBlanks = %.1f fps\n",
 						s_overlay_new_frame_count, s_overlay_vblank_count,
 						(float)s_overlay_new_frame_count * 60.0f / (float)s_overlay_vblank_count);
+					OutputDebugStringA(buf);
 					s_overlay_vblank_count = 0;
 					s_overlay_new_frame_count = 0;
 				}
