@@ -635,7 +635,6 @@ uint32_t NV2ADevice::MMIORead(int barIndex, uint32_t addr, unsigned size)
 
 void NV2ADevice::BlockWrite(const NV2ABlockInfo* block, uint32_t addr, uint32_t value, unsigned size)
 {
-	FUNC_PROFILE("NV2ABlockWrite");
 	switch (size) {
 	case sizeof(uint8_t) : {
 #if 0
@@ -650,7 +649,12 @@ void NV2ADevice::BlockWrite(const NV2ABlockInfo* block, uint32_t addr, uint32_t 
 		mask = 0xFF << shift;
 		block->ops.write(m_nv2a_state, aligned_addr - block->offset, (aligned_value & ~mask) | (value << shift));
 #else
-		block->ops.write(m_nv2a_state, addr - block->offset, value);
+		{
+			char name[64];
+			snprintf(name, sizeof(name), "NV2AWr-%s", block->name ? block->name : "?");
+			FUNC_PROFILE(name);
+			block->ops.write(m_nv2a_state, addr - block->offset, value);
+		}
 #endif
 		return;
 	}
@@ -666,13 +670,23 @@ void NV2ADevice::BlockWrite(const NV2ABlockInfo* block, uint32_t addr, uint32_t 
 		aligned_value = block->ops.read(m_nv2a_state, aligned_addr - block->offset);
 		shift = (addr & 2) * 16;
 		mask = 0xFFFF << shift;
-		block->ops.write(m_nv2a_state, aligned_addr - block->offset, (aligned_value & ~mask) | (value << shift));
+		{
+			char name[64];
+			snprintf(name, sizeof(name), "NV2AWr-%s", block->name ? block->name : "?");
+			FUNC_PROFILE(name);
+			block->ops.write(m_nv2a_state, aligned_addr - block->offset, (aligned_value & ~mask) | (value << shift));
+		}
 		return;
 	}
 	case sizeof(uint32_t) :
 		assert((addr & 3) == 0); // TODO : What if this fails?	
 
-		block->ops.write(m_nv2a_state, addr - block->offset, value);
+		{
+			char name[64];
+			snprintf(name, sizeof(name), "NV2AWr-%s", block->name ? block->name : "?");
+			FUNC_PROFILE(name);
+			block->ops.write(m_nv2a_state, addr - block->offset, value);
+		}
 		return;
 	}
 }
