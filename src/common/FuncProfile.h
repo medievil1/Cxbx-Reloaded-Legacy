@@ -1,11 +1,19 @@
-// Minimal per-function profiler for diagnosing emulator bottlenecks.
-// Wrap code with FUNC_PROFILE("name") { ... } to accumulate host QPC ticks.
-// Call FuncProfileDump() to write cumulative times to C:\temp\cxbx_func.txt.
 #pragma once
 #include <cstdio>
 #include <unordered_map>
 #include <string>
 #include <windows.h>
+
+// Helper to get host QPC frequency (call once, cached)
+inline int64_t GetQPCFreq() {
+	static int64_t freq = 0;
+	if (!freq) {
+		LARGE_INTEGER f;
+		QueryPerformanceFrequency(&f);
+		freq = f.QuadPart;
+	}
+	return freq;
+}
 
 namespace FuncProfile {
 	struct Entry {
@@ -27,11 +35,12 @@ namespace FuncProfile {
 		s_dumped = true;
 		FILE* f = fopen("C:\\temp\\cxbx_func.txt", "w");
 		if (!f) return;
+		int64_t freq = GetQPCFreq();
 		for (auto& [name, e] : map()) {
-			double ms = (double)e.total_ticks * 1000.0 / (double)(QueryPerformanceFrequencyCounter());
+			double ms = (double)e.total_ticks * 1000.0 / (double)freq;
+			double us_per_call = e.call_count ? (ms * 1000.0 / e.call_count) : 0.0;
 			fprintf(f, "%s: %lld calls, %.3f ms total, %.3f us/call\n",
-				name.c_str(), (long long)e.call_count, ms,
-				e.call_count ? (ms * 1000.0 / e.call_count) : 0.0);
+				name.c_str(), (long long)e.call_count, ms, us_per_call);
 		}
 		fclose(f);
 	}
@@ -50,14 +59,3 @@ namespace FuncProfile {
 
 #define FUNC_PROFILE(name) FuncProfile::Scoped _fpscope(name)
 #define FUNC_PROFILE_DUMP() FuncProfile::dump()
-
-// Helper to get host QPC frequency (call once)
-inline int64_t QueryPerformanceFrequencyCounter() {
-	static int64_t freq = 0;
-	if (!freq) {
-		LARGE_INTEGER f;
-		QueryPerformanceFrequency(&f);
-		freq = f.QuadPart;
-	}
-	return freq;
-}

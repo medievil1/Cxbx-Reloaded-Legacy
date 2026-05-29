@@ -30,6 +30,7 @@
 #include <assert.h> // For assert()
 #include <cstring>  // For memcpy (type-punning in float depth decode)
 #include <cstdio>
+#include "common/FuncProfile.h"
 
 #include "core\kernel\support\Emu.h"
 #include "core\hle\D3D8\XbD3D8Types.h" // For X_D3DFORMAT
