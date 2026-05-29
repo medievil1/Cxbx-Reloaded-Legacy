@@ -3004,7 +3004,9 @@ bool EmuX86_DecodeException(LPEXCEPTION_POINTERS e)
 	// that case may be logged, but it shouldn't fail the opcode handler.
 	_DInst info;
 	DWORD StartingEip = e->ContextRecord->Eip;
-	EmuLog(LOG_LEVEL::DEBUG, "Starting instruction emulation from 0x%08X", e->ContextRecord->Eip);
+	LOG_CHECK_ENABLED(LOG_LEVEL::DEBUG) {
+		EmuLog(LOG_LEVEL::DEBUG, "Starting instruction emulation from 0x%08X", e->ContextRecord->Eip);
+	}
 
 	// Execute op-codes until we hit an unhandled instruction, or an error occurs
 	//while (true)
