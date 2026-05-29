@@ -232,7 +232,7 @@ uint32_t NV2ADevice::ResolveDmaBaseAddress(NV2AState *d, xbox::addr_xt dma_obj_a
 #include "EmuNV2A_PRMVIO.cpp"
 #include "EmuNV2A_PTIMER.cpp"
 #include "EmuNV2A_PVIDEO.cpp"
-#include "EmuNV2A_USER.cpp"
+#include "EmuNV2A_USER.cpp" // pfifo_lock removed - force recompile
 
 #include "EmuNV2A_PRMA.cpp"
 #include "EmuNV2A_PCOUNTER.cpp"
