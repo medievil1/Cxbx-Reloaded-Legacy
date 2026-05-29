@@ -47,6 +47,7 @@
 #include <process.h> // For __beginthreadex(), etc.
 
 #include "core\kernel\init\CxbxKrnl.h" // For XBOX_MEMORY_SIZE, DWORD, etc
+#include "common/FuncProfile.h"
 #include "core\kernel\support\Emu.h"
 #include "core\kernel\support\NativeHandle.h"
 #include "core\kernel\exports\EmuKrnl.h"
@@ -314,6 +315,7 @@ const NV2ABlockInfo regions[] = { // blocktable
 
 const NV2ABlockInfo* EmuNV2A_Block(xbox::addr_xt addr)
 {
+	FUNC_PROFILE("NV2ABlock");
 	// Find the block in the block table
 	const NV2ABlockInfo* block = &regions[0];
 	int i = 0;
@@ -591,6 +593,7 @@ void NV2ADevice::IOWrite(int barIndex, uint32_t port, uint32_t value, unsigned s
 
 uint32_t NV2ADevice::BlockRead(const NV2ABlockInfo* block, uint32_t addr, unsigned size)
 {
+	FUNC_PROFILE("NV2ABlockRead");
 	switch (size) {
 	case sizeof(uint8_t) :
 		return block->ops.read(m_nv2a_state, addr - block->offset) & 0xFF;
@@ -632,6 +635,7 @@ uint32_t NV2ADevice::MMIORead(int barIndex, uint32_t addr, unsigned size)
 
 void NV2ADevice::BlockWrite(const NV2ABlockInfo* block, uint32_t addr, uint32_t value, unsigned size)
 {
+	FUNC_PROFILE("NV2ABlockWrite");
 	switch (size) {
 	case sizeof(uint8_t) : {
 #if 0
