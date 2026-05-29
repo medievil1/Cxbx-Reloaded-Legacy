@@ -84,13 +84,12 @@ DEVICE_WRITE32(PVIDEO)
 		d->pvideo.regs[RI(NV_PVIDEO_BUFFER)] = value;
 		d->enable_overlay = (value != 0);
 		pvideo_vga_invalidate(d);
-		// Trigger overlay compositing inline on the game thread.
-		// This matches the master (D3D9 HLE) branch where UpdateOverlay
-		// is a single synchronous call.  Bypasses the puller entirely
-		// to avoid the pfifo_lock/pgraph_lock deadlock.
-		if (d->enable_overlay && g_pgraph_backend.flip_stall) {
-			extern void pgraph_trigger_overlay_composite(NV2AState *d);
-			pgraph_trigger_overlay_composite(d);
+		// Mark overlay as dirty so the puller thread presents at VBlank rate.
+		// Do NOT call flip_stall inline — it costs ~6ms and PVIDEO_BUFFER is
+		// written ~961 times/sec during video playback (only 24-30 new frames).
+		if (d->enable_overlay) {
+			d->overlay_dirty = true;
+			SetEvent(d->pfifo.puller_event);
 		}
 		break;
 	case NV_PVIDEO_STOP:

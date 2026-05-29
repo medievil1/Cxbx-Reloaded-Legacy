@@ -430,6 +430,8 @@ typedef struct NV2AState {
     // qemu_irq irq;
     bool exiting;
 	bool enable_overlay = false;
+	bool overlay_dirty = false;          // Set when PVIDEO registers change; cleared after present
+	int64_t overlay_last_present_qpc = 0; // QPC timestamp of last overlay present (rate-limit)
 	bool ptimer_active = false;
 	uint64_t ptimer_last;
 	uint64_t ptimer_period;
