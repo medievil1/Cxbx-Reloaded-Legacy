@@ -48,10 +48,6 @@ DEVICE_READ32(USER)
 		uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
 		uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
 		if (get_v != put_v) {
-			// During overlay (video playback), skip inline pushbuffer
-			// processing — advance GET to PUT so the game sees the GPU
-			// as idle immediately.  pfifo_flush_to_pgraph → pfifo_run_pusher
-			// would process hundreds of pending methods, costing 93ms.
 			if (d->enable_overlay) {
 				d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
 				get_v = put_v;
@@ -74,18 +70,10 @@ DEVICE_READ32(USER)
 		DEVICE_READ32_END(USER);
 	}
 
-	// Fast path for NV_USER_REF reads (reference counter).
-	// NV_USER_REF (offset 0x48) is defined in xemu's nv2a_regs.h and
-	// handled in xemu's user.c — it maps to NV_PFIFO_CACHE1_REF.
-	// The value is updated by REF_CNT (method 0x0050, documented by
-	// envytools: hw/fifo/puller.html#syncing-with-host-reference-counter).
-	// Since we process commands inline on DMA_PUT writes, REF should
-	// already be current here (GET == PUT).  This flush is a safety net
-	// that rarely triggers in practice — xemu omits it entirely.
 	if ((addr & 0xFFFF) == NV_USER_REF) {
 		uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
 		uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
-		if (get_v != put_v) {
+		if (get_v != put_v && !d->enable_overlay) {
 			pfifo_flush_to_pgraph(d);
 		}
 		uint32_t result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)];
@@ -105,19 +93,19 @@ DEVICE_READ32(USER)
 				NV_PFIFO_CACHE1_PUSH1_CHID);
 
 		if (channel_id == cur_channel_id) {
-			switch(addr & 0xFFFF) { // Was DEVICE_READ32_SWITCH()
-				case NV_USER_DMA_PUT:
-					result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
-					break;
-				case NV_USER_DMA_GET:
-					result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
-					break;
-				case NV_USER_REF:
-					result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)];
-					break;
-				default:
-					DEBUG_READ32_UNHANDLED(USER);
-					break;
+			switch (addr & 0xFFFF) {
+			case NV_USER_DMA_PUT:
+				result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
+				break;
+			case NV_USER_DMA_GET:
+				result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
+				break;
+			case NV_USER_REF:
+				result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)];
+				break;
+			default:
+				assert(false);
+				break;
 			}
 		} else {
 			/* ramfc */
@@ -138,12 +126,13 @@ DEVICE_WRITE32(USER)
 	unsigned int channel_id = addr >> 16;
 	assert(channel_id < NV2A_NUM_CHANNELS);
 
-	// During overlay (video playback), the puller thread holds pfifo_lock
-	// frequently.  Use TryEnter to avoid blocking for 11-14ms per write.
-	// If the lock is free, process normally.  If contended, just write the
-	// register directly (32-bit atomic) and wake the puller.
-	bool locked = TryEnterCriticalSection(&d->pfifo.pfifo_lock.lock);
-	if (!locked && d->enable_overlay) {
+	// During overlay (video playback), bypass pfifo_lock entirely.
+	// The game's D3D runtime writes DMA_PUT/GET/REF through this handler
+	// 800+ times per session.  Each lock acquisition blocks for 10-13ms
+	// while the puller holds pfifo_lock.  32-bit register writes are
+	// atomic on x86, and the puller only reads these registers — no torn
+	// write possible.  The puller is woken by the VBlank handler instead.
+	if (d->enable_overlay) {
 		uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
 		if (channel_modes & (1 << channel_id)) {
 			unsigned int cur_channel_id =
@@ -167,9 +156,7 @@ DEVICE_WRITE32(USER)
 		DEVICE_WRITE32_END(USER);
 	}
 
-	if (!locked) {
-		qemu_mutex_lock(&d->pfifo.pfifo_lock);
-	}
+	qemu_mutex_lock(&d->pfifo.pfifo_lock);
 
 	uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
 	if (channel_modes & (1 << channel_id)) {
@@ -182,12 +169,6 @@ DEVICE_WRITE32(USER)
 			switch (addr & 0xFFFF) {
 			case NV_USER_DMA_PUT: {
 				d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
-				// Skip inline pushbuffer processing when the PVIDEO overlay is
-				// active (XMV video playback).  During video the pusher has
-				// almost no commands (1-3 draws per 60 frames), but acquiring
-				// pgraph_lock (held by the puller's flip_stall) costs ~36ms
-				// per USER DMA_PUT write.  The puller handles overlay
-				// compositing independently.
 				if (!d->enable_overlay) {
 					uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
 					uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
@@ -215,12 +196,7 @@ DEVICE_WRITE32(USER)
 				break;
 			}
 
-            // Kick puller thread (for auto-present fallback on raw-pushbuffer
-            // games without explicit FLIP_STALL).  Do NOT signal pusher_cond:
-            // command processing is driven exclusively by inline flushes
-            // (pfifo_flush_to_pgraph called from DMA_GET reads and before draws).
-            // Signaling the pusher would cause it to race for pfifo_lock,
-            // introducing intermittent stalls in the game thread.
+            // Kick puller thread
             SetEvent(d->pfifo.puller_event);
 		} else {
 			/* ramfc */
