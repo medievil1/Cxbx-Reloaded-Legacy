@@ -164,7 +164,6 @@ DEVICE_WRITE32(USER)
 				}
 			}
 		}
-		SetEvent(d->pfifo.puller_event);
 		DEVICE_WRITE32_END(USER);
 	}
 

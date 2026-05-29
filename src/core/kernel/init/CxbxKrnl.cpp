@@ -1422,6 +1422,11 @@ static void CxbxrKrnlInitHacks()
 					extern void IncrementOverlayVBlankCounter();
 					if (d->enable_overlay) {
 						IncrementOverlayVBlankCounter();
+						// Wake puller once per VBlank for overlay compositing.
+						// This replaces the per-DMA_PUT-write SetEvent in the
+						// USER handler, eliminating 800+ wake-ups per session
+						// and the pfifo_lock contention they cause.
+						SetEvent(d->pfifo.puller_event);
 					}
 
 					// Generate PVIDEO buffer completion interrupts for active overlay buffers.
