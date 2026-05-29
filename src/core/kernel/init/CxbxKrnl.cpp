@@ -1422,6 +1422,11 @@ static void CxbxrKrnlInitHacks()
 					extern void IncrementOverlayVBlankCounter();
 					if (d->enable_overlay) {
 						IncrementOverlayVBlankCounter();
+						// Wake puller once per VBlank so CACHE1 drain, FLIP_STALL
+						// processing, and buffer management continue during video.
+						// The lockless overlay compositing happens inline from
+						// the PVIDEO write handler; this just keeps the puller alive.
+						SetEvent(d->pfifo.puller_event);
 					}
 
 					// Generate PVIDEO buffer completion interrupts for active overlay buffers.
