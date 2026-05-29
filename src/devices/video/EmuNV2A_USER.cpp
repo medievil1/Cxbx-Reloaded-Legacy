@@ -114,39 +114,14 @@ DEVICE_WRITE32(USER)
 	unsigned int channel_id = addr >> 16;
 	assert(channel_id < NV2A_NUM_CHANNELS);
 
-	// During overlay (video playback), bypass pfifo_lock entirely.
-	// Holding pfifo_lock while the puller thread also holds it creates
-	// a lock-ordering deadlock pattern with pgraph_lock.  32-bit aligned
-	// writes are atomic on x86 — the puller sees either the old or new
-	// value, never a torn write.  We still run pushbuffer processing and
-	// puller wake-up to keep the game's D3D runtime and overlay compositing
-	// progressing correctly.
-	if (d->enable_overlay) {
-		uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
-		if (channel_modes & (1 << channel_id)) {
-			unsigned int cur_channel_id =
-				GET_MASK(d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH1)],
-					NV_PFIFO_CACHE1_PUSH1_CHID);
-			if (channel_id == cur_channel_id) {
-				switch (addr & 0xFFFF) {
-				case NV_USER_DMA_PUT:
-					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
-					break;
-				case NV_USER_DMA_GET:
-					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = value;
-					break;
-				case NV_USER_REF:
-					d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)] = value;
-					break;
-				default: break;
-				}
-			}
-		}
-		SetEvent(d->pfifo.puller_event);
-		DEVICE_WRITE32_END(USER);
-	}
-
-	qemu_mutex_lock(&d->pfifo.pfifo_lock);
+	// The pfifo_lock was held here to serialize PFIFO register access between
+	// the game thread and the puller thread.  Holding pfifo_lock while the
+	// puller also holds it creates a lock-ordering deadlock when both threads
+	// then need pgraph_lock.  32-bit aligned register reads/writes are atomic
+	// on x86, so the lock is unnecessary for correctness.  The puller sees
+	// either the old or new value of DMA_GET/PUT — never a torn write.
+	// We still call pfifo_run_pusher (non-overlay) and SetEvent to keep D3D
+	// pushbuffer processing and overlay compositing progressing.
 
 	uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
 	if (channel_modes & (1 << channel_id)) {
@@ -158,6 +133,12 @@ DEVICE_WRITE32(USER)
 			switch (addr & 0xFFFF) {
 			case NV_USER_DMA_PUT: {
 				d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
+				// During overlay (video), skip inline pushbuffer processing.
+				// pfifo_run_pusher holds pgraph_lock while processing DMA
+				// commands; the puller's pfifo_run_puller uses TryEnter on
+				// pgraph_lock and yields if contended.  Processing inline
+				// would hold pgraph_lock for 38ms, starving the puller and
+				// preventing flip_stall overlay compositing entirely.
 				if (!d->enable_overlay) {
 					uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
 					uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
@@ -165,11 +146,9 @@ DEVICE_WRITE32(USER)
 					                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
 					                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
 					if (pusher_can_run) {
-						qemu_mutex_unlock(&d->pfifo.pfifo_lock);
 						CxbxSetPullerContext(true);
 						pfifo_run_pusher(d);
 						CxbxSetPullerContext(false);
-						qemu_mutex_lock(&d->pfifo.pfifo_lock);
 					}
 				}
 				break;
@@ -187,12 +166,13 @@ DEVICE_WRITE32(USER)
 
 			SetEvent(d->pfifo.puller_event);
 		} else {
+			/* ramfc */
 			assert(false);
 		}
 	} else {
+		/* PIO Mode */
 		assert(false);
 	}
 
-	qemu_mutex_unlock(&d->pfifo.pfifo_lock);
 	DEVICE_WRITE32_END(USER);
 }
