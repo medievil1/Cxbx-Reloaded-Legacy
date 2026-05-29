@@ -39,46 +39,36 @@ DEVICE_READ32(USER)
 	unsigned int channel_id = addr >> 16;
 	assert(channel_id < NV2A_NUM_CHANNELS);
 
-	// Fast path for DMA_GET reads.  When the DMA pusher cannot process
-	// (access flags not set in HLE mode), advance GET to PUT so polls
-	// like BlockUntilIdle() return immediately.  When the pusher CAN
-	// process, drain pending commands inline so the native polling loop
-	// sees GET advance and exits naturally.
 	if ((addr & 0xFFFF) == NV_USER_DMA_GET) {
 		uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
 		uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
 		if (get_v != put_v) {
-			uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
-			uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
-			bool pusher_can_run = GET_MASK(push0, NV_PFIFO_CACHE1_PUSH0_ACCESS)
-			                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
-			                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
-			if (!pusher_can_run) {
+			if (d->enable_overlay) {
 				d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
 				get_v = put_v;
 			} else {
-				// Drain pending commands inline — enables native
-				// BlockUntilIdle polling to work without a patch.
-				pfifo_flush_to_pgraph(d);
-				get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
+				uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
+				uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
+				bool pusher_can_run = GET_MASK(push0, NV_PFIFO_CACHE1_PUSH0_ACCESS)
+				                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
+				                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
+				if (!pusher_can_run) {
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
+					get_v = put_v;
+				} else {
+					pfifo_flush_to_pgraph(d);
+					get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
+				}
 			}
 		}
 		uint32_t result = get_v;
 		DEVICE_READ32_END(USER);
 	}
 
-	// Fast path for NV_USER_REF reads (reference counter).
-	// NV_USER_REF (offset 0x48) is defined in xemu's nv2a_regs.h and
-	// handled in xemu's user.c — it maps to NV_PFIFO_CACHE1_REF.
-	// The value is updated by REF_CNT (method 0x0050, documented by
-	// envytools: hw/fifo/puller.html#syncing-with-host-reference-counter).
-	// Since we process commands inline on DMA_PUT writes, REF should
-	// already be current here (GET == PUT).  This flush is a safety net
-	// that rarely triggers in practice — xemu omits it entirely.
 	if ((addr & 0xFFFF) == NV_USER_REF) {
 		uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
 		uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
-		if (get_v != put_v) {
+		if (get_v != put_v && !d->enable_overlay) {
 			pfifo_flush_to_pgraph(d);
 		}
 		uint32_t result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)];
@@ -88,41 +78,34 @@ DEVICE_READ32(USER)
 	qemu_mutex_lock(&d->pfifo.pfifo_lock);
 
 	uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
-
 	uint32_t result = 0;
 	if (channel_modes & (1 << channel_id)) {
-		/* DMA Mode */
-
 		unsigned int cur_channel_id =
 			GET_MASK(d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH1)],
 				NV_PFIFO_CACHE1_PUSH1_CHID);
-
 		if (channel_id == cur_channel_id) {
-			switch(addr & 0xFFFF) { // Was DEVICE_READ32_SWITCH()
-				case NV_USER_DMA_PUT:
-					result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
-					break;
-				case NV_USER_DMA_GET:
-					result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
-					break;
-				case NV_USER_REF:
-					result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)];
-					break;
-				default:
-					DEBUG_READ32_UNHANDLED(USER);
-					break;
+			switch (addr & 0xFFFF) {
+			case NV_USER_DMA_PUT:
+				result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
+				break;
+			case NV_USER_DMA_GET:
+				result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
+				break;
+			case NV_USER_REF:
+				result = d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)];
+				break;
+			default:
+				assert(false);
+				break;
 			}
 		} else {
-			/* ramfc */
 			assert(false);
 		}
 	} else {
-		/* PIO Mode */
 		assert(false);
 	}
 
 	qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-
 	DEVICE_READ32_END(USER);
 }
 
@@ -131,11 +114,54 @@ DEVICE_WRITE32(USER)
 	unsigned int channel_id = addr >> 16;
 	assert(channel_id < NV2A_NUM_CHANNELS);
 
+	// During overlay (video playback), bypass pfifo_lock entirely.
+	// Holding pfifo_lock while the puller thread also holds it creates
+	// a lock-ordering deadlock pattern with pgraph_lock.  32-bit aligned
+	// writes are atomic on x86 — the puller sees either the old or new
+	// value, never a torn write.  We still run pushbuffer processing and
+	// puller wake-up to keep the game's D3D runtime and overlay compositing
+	// progressing correctly.
+	if (d->enable_overlay) {
+		uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
+		if (channel_modes & (1 << channel_id)) {
+			unsigned int cur_channel_id =
+				GET_MASK(d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH1)],
+					NV_PFIFO_CACHE1_PUSH1_CHID);
+			if (channel_id == cur_channel_id) {
+				switch (addr & 0xFFFF) {
+				case NV_USER_DMA_PUT:
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
+					{
+						uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
+						uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
+						bool pusher_can_run = GET_MASK(push0, NV_PFIFO_CACHE1_PUSH0_ACCESS)
+						                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
+						                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
+						if (pusher_can_run) {
+							CxbxSetPullerContext(true);
+							pfifo_run_pusher(d);
+							CxbxSetPullerContext(false);
+						}
+					}
+					break;
+				case NV_USER_DMA_GET:
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = value;
+					break;
+				case NV_USER_REF:
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)] = value;
+					break;
+				default: break;
+				}
+			}
+		}
+		SetEvent(d->pfifo.puller_event);
+		DEVICE_WRITE32_END(USER);
+	}
+
 	qemu_mutex_lock(&d->pfifo.pfifo_lock);
 
 	uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
 	if (channel_modes & (1 << channel_id)) {
-		/* DMA Mode */
 		unsigned int cur_channel_id =
 			GET_MASK(d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH1)],
 				NV_PFIFO_CACHE1_PUSH1_CHID);
@@ -171,23 +197,14 @@ DEVICE_WRITE32(USER)
 				break;
 			}
 
-            // Kick puller thread (for auto-present fallback on raw-pushbuffer
-            // games without explicit FLIP_STALL).  Do NOT signal pusher_cond:
-            // command processing is driven exclusively by inline flushes
-            // (pfifo_flush_to_pgraph called from DMA_GET reads and before draws).
-            // Signaling the pusher would cause it to race for pfifo_lock,
-            // introducing intermittent stalls in the game thread.
-            SetEvent(d->pfifo.puller_event);
+			SetEvent(d->pfifo.puller_event);
 		} else {
-			/* ramfc */
 			assert(false);
 		}
 	} else {
-		/* PIO Mode */
 		assert(false);
 	}
 
-    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-
+	qemu_mutex_unlock(&d->pfifo.pfifo_lock);
 	DEVICE_WRITE32_END(USER);
 }
