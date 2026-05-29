@@ -2310,7 +2310,9 @@ static unsigned int kelvin_map_texgen(uint32_t parameter, unsigned int channel)
 
 void pgraph_trigger_overlay_composite(NV2AState *d)
 {
-	qemu_mutex_lock(&d->pgraph.pgraph_lock);
+	// flip_stall only composites the overlay (D3D11 present + YUY2 copy);
+	// it does not access PGRAPH registers, so pgraph_lock is unnecessary.
+	// Taking it here creates a deadlock with pfifo_run_puller which holds
+	// pgraph_lock for the entire CACHE1 drain.
 	g_pgraph_backend.flip_stall(d);
-	qemu_mutex_unlock(&d->pgraph.pgraph_lock);
 }

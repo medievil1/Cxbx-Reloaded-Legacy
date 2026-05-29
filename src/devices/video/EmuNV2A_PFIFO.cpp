@@ -147,15 +147,7 @@ static bool pfifo_run_puller(NV2AState *d)
     uint32_t *get_reg = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_GET)];
     uint32_t *put_reg = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUT)];
 
-    // TryEnter pgraph_lock: if the game thread holds it (for inline overlay
-    // compositing via pgraph_trigger_overlay_composite), skip CACHE1 drain
-    // this cycle rather than blocking.  The game thread takes pgraph_lock
-    // during PVIDEO BUFFER writes → inline flip_stall → composits overlay.
-    // Blocking here would deadlock the puller holding pfifo_lock against
-    // the game thread's need for pfifo_lock in USER writes.
-    if (!TryEnterCriticalSection(&d->pgraph.pgraph_lock.lock)) {
-        return false;
-    }
+    qemu_mutex_lock(&d->pgraph.pgraph_lock);
 
     while (true) {
         if (!GET_MASK(*pull0, NV_PFIFO_CACHE1_PULL0_ACCESS)) break;
