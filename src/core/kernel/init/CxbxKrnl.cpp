@@ -1504,6 +1504,18 @@ static void CxbxrKrnlInitHacks()
 			}
 		} while (more_work);
 
+		// If DPCs are still pending after dispatch (self-re-queuing DPCs),
+		// yield briefly to prevent starvation of other threads.  On real Xbox
+		// hardware, self-re-queuing DPCs would only fire on the next timer
+		// tick (~1ms).  Sleep(1) approximates this natural rate-limiting.
+		{
+			extern bool KeIsDpcQueueNonEmpty();
+			if (KeIsDpcQueueNonEmpty()) {
+				Sleep(1);
+				continue;  // Re-dispatch without blocking on KeWaitForDpc
+			}
+		}
+
 		// Check for present stalls — if no present has arrived in 5 seconds,
 		// dump all thread stacks to diagnose what's blocking progress.
 		EmuCheckPresentStall(5000);

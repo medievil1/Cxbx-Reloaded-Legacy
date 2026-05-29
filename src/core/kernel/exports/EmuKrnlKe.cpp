@@ -175,6 +175,16 @@ void KeClearDpcPending()
 	g_DpcData.IsDpcPending.clear();
 }
 
+// Returns true if the DPC queue has entries waiting to be dispatched.
+// Used by the background DPC thread to detect self-re-queuing DPCs.
+bool KeIsDpcQueueNonEmpty()
+{
+	EnterCriticalSection(&(g_DpcData.Lock));
+	bool result = !IsListEmpty(&(g_DpcData.DpcQueue));
+	LeaveCriticalSection(&(g_DpcData.Lock));
+	return result;
+}
+
 // Wake the main DPC thread to dispatch a hardware interrupt (called from system_events thread)
 void KeSignalVBlankPending()
 {
@@ -550,9 +560,14 @@ void ExecuteDpcQueue(bool inline_dispatch)
 		}
 	}
 
-	// If there are still DPCs in the queue (added during this dispatch pass),
-	// re-signal IsDpcPending so the background DPC thread wakes to process them.
-	if (!IsListEmpty(&(g_DpcData.DpcQueue))) {
+	// If there are still DPCs in the queue (added during this dispatch pass)
+	// and we were called from the inline path (KeInsertQueueDpc), signal the
+	// background DPC thread so it picks them up. When called from the background
+	// thread itself (inline_dispatch=false), do NOT re-signal — that would cause
+	// an infinite tight loop for self-re-queuing DPCs.  The background thread
+	// will naturally re-check the queue after yielding (see the Sleep(1) in the
+	// DPC thread loop).
+	if (inline_dispatch && !IsListEmpty(&(g_DpcData.DpcQueue))) {
 		g_DpcData.IsDpcPending.test_and_set();
 		g_DpcData.IsDpcPending.notify_one();
 	}
