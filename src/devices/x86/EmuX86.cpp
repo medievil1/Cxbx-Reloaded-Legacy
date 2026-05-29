@@ -3003,13 +3003,14 @@ bool EmuX86_DecodeException(LPEXCEPTION_POINTERS e)
 	DWORD StartingEip = e->ContextRecord->Eip;
 
 	// Per-EIP instruction cache: the NV2A miniport DPC hits the same
-	// ~15 addresses thousands of times per second.  Caching the distorm
+	// ~15-50 addresses thousands of times per second.  Caching the distorm
 	// decode avoids 15,000+ distorm calls per video session (~0.4us each).
+	// 128 entries covers the full video decoder DPC loop with room to spare.
 	struct CachedInst { DWORD eip; _DInst inst; };
-	static CachedInst s_cache[16] = {};
+	static CachedInst s_cache[128] = {};
 	static int s_cache_wr = 0;
 	bool cached = false;
-	for (int i = 0; i < 16; i++) {
+	for (int i = 0; i < 128; i++) {
 		if (s_cache[i].eip == StartingEip) {
 			info = s_cache[i].inst;
 			cached = true;
@@ -3024,7 +3025,7 @@ bool EmuX86_DecodeException(LPEXCEPTION_POINTERS e)
 		}
 		s_cache[s_cache_wr].eip = StartingEip;
 		s_cache[s_cache_wr].inst = info;
-		s_cache_wr = (s_cache_wr + 1) & 15;
+		s_cache_wr = (s_cache_wr + 1) & 127;
 	}
 
 		switch (info.opcode) { // Keep these cases alphabetically ordered and condensed

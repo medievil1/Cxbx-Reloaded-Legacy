@@ -232,15 +232,24 @@ int pfifo_puller_thread(NV2AState *d)
                 qemu_mutex_unlock(&d->pfifo.pfifo_lock);
                 g_pgraph_backend.flip_stall(d);
                 qemu_mutex_lock(&d->pfifo.pfifo_lock);
-            } else if (d->enable_overlay && !g_PullerFlipStallThisCycle) {
-                // PVIDEO overlay present: composite and display the overlay
-                // at frame rate. Only skip when FLIP_STALL already presented
-                // this cycle (it composites overlay too). Clear draw_dirty
-                // so stale 3D→FMV transition state doesn't block anything.
-                d->pgraph.surface_color.draw_dirty = false;
-                qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-                g_pgraph_backend.flip_stall(d);
-                qemu_mutex_lock(&d->pfifo.pfifo_lock);
+            } else if (d->enable_overlay && d->overlay_dirty && !g_PullerFlipStallThisCycle) {
+                // PVIDEO overlay present: composite and display the overlay.
+                // Rate-limit to VBlank interval (~16.67ms at 60Hz) to avoid
+                // presenting 961 times/sec when the video frame only changes
+                // 24-30 times.  Uses QPC for sub-ms timing accuracy.
+                LARGE_INTEGER now;
+                QueryPerformanceCounter(&now);
+                int64_t elapsed = now.QuadPart - d->overlay_last_present_qpc;
+                // ~16.67ms in QPC ticks (VBlank interval at 60Hz)
+                int64_t vblank_ticks = d->vblank_period > 0 ? d->vblank_period : (HostQPCFrequency / 60);
+                if (elapsed >= vblank_ticks) {
+                    d->overlay_dirty = false;
+                    d->overlay_last_present_qpc = now.QuadPart;
+                    d->pgraph.surface_color.draw_dirty = false;
+                    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+                    g_pgraph_backend.flip_stall(d);
+                    qemu_mutex_lock(&d->pfifo.pfifo_lock);
+                }
             }
             g_PullerFlipStallThisCycle = false;
         }
@@ -255,8 +264,11 @@ int pfifo_puller_thread(NV2AState *d)
         // registers.  Use a simple auto-reset event (puller_event) instead of
         // qemu_cond — any thread can signal it without holding pfifo_lock,
         // eliminating the deadlock-prone continue_event protocol.
+        // Use timed wait (16ms) when overlay is active so rate-limited presents
+        // fire at VBlank rate even without explicit signals.
         qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-        WaitForSingleObject(d->pfifo.puller_event, INFINITE);
+        DWORD waitMs = (d->enable_overlay && d->overlay_dirty) ? 16 : INFINITE;
+        WaitForSingleObject(d->pfifo.puller_event, waitMs);
         qemu_mutex_lock(&d->pfifo.pfifo_lock);
     }
     qemu_mutex_unlock(&d->pfifo.pfifo_lock);
