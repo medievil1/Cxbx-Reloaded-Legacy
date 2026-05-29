@@ -3001,20 +3001,31 @@ bool EmuX86_DecodeException(LPEXCEPTION_POINTERS e)
 	// Decoded instruction information.
 	_DInst info;
 	DWORD StartingEip = e->ContextRecord->Eip;
-	LOG_CHECK_ENABLED(LOG_LEVEL::DEBUG) {
-		EmuLog(LOG_LEVEL::DEBUG, "Starting instruction emulation from 0x%08X", e->ContextRecord->Eip);
-	}
 
-	for (int x=0;x<1;x++)
-	{
-		{
-			FUNC_PROFILE("DecodeOpcode");
-			if (!EmuX86_DecodeOpcode((uint8_t*)e->ContextRecord->Eip, info)) {
-				EmuLog(LOG_LEVEL::WARNING, "Error decoding opcode at 0x%08X", e->ContextRecord->Eip);
-				assert(false);
-				return false;
-			}
+	// Per-EIP instruction cache: the NV2A miniport DPC hits the same
+	// ~15 addresses thousands of times per second.  Caching the distorm
+	// decode avoids 15,000+ distorm calls per video session (~0.4us each).
+	struct CachedInst { DWORD eip; _DInst inst; };
+	static CachedInst s_cache[16] = {};
+	static int s_cache_wr = 0;
+	bool cached = false;
+	for (int i = 0; i < 16; i++) {
+		if (s_cache[i].eip == StartingEip) {
+			info = s_cache[i].inst;
+			cached = true;
+			break;
 		}
+	}
+	if (!cached) {
+		if (!EmuX86_DecodeOpcode((uint8_t*)StartingEip, info)) {
+			EmuLog(LOG_LEVEL::WARNING, "Error decoding opcode at 0x%08X", StartingEip);
+			assert(false);
+			return false;
+		}
+		s_cache[s_cache_wr].eip = StartingEip;
+		s_cache[s_cache_wr].inst = info;
+		s_cache_wr = (s_cache_wr + 1) & 15;
+	}
 
 		switch (info.opcode) { // Keep these cases alphabetically ordered and condensed
 			case I_ADD:
@@ -3363,7 +3374,6 @@ bool EmuX86_DecodeException(LPEXCEPTION_POINTERS e)
 
 
 		e->ContextRecord->Eip += info.size;
-	} // while true
 
 	return true;
 
