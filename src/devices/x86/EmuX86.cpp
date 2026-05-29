@@ -1341,9 +1341,32 @@ bool EmuX86_Opcode_PUSH(LPEXCEPTION_POINTERS e, _DInst& info)
 #include "common/Timer.h"
 #include "common/FuncProfile.h"
 
+// VBlank-counting RDTSC: when the overlay is active (XMV video playing),
+// RDTSC returns VBlank-counter-based ticks instead of real-time TSC.
+// This gives the decoder frame-granular timing so its QPC-based frame
+// release check fires at exact VBlank boundaries.
+static std::atomic_uint64_t s_overlay_vblank_count{0};
+static int64_t TSC_TICKS_PER_VBLANK = 0;
+
+void IncrementOverlayVBlankCounter() {
+	s_overlay_vblank_count.fetch_add(1, std::memory_order_relaxed);
+}
+
 void EmuX86_Opcode_RDTSC(LPEXCEPTION_POINTERS e)
 {
 	FUNC_PROFILE("RDTSC");
+	if (s_overlay_vblank_count.load(std::memory_order_relaxed) > 0) {
+		if (TSC_TICKS_PER_VBLANK == 0) {
+			TSC_TICKS_PER_VBLANK = HostQPCFrequency > 0
+				? (int64_t)((double)XBOX_TSC_FREQUENCY * 16.667 / 1000.0)
+				: 12222222;
+		}
+		uint64_t v = s_overlay_vblank_count.load(std::memory_order_acquire);
+		uint64_t ticks = v * TSC_TICKS_PER_VBLANK;
+		e->ContextRecord->Eax = (uint32_t)ticks;
+		e->ContextRecord->Edx = (uint32_t)(ticks >> 32);
+		return;
+	}
 	// We use CxbxGetPerformanceCounter. KeQueryPerformanceCounter is a differnet frequency and cannot be used!
 	ULARGE_INTEGER PerformanceCount;
 	PerformanceCount.QuadPart = CxbxGetPerformanceCounter(/*acpi*/false);

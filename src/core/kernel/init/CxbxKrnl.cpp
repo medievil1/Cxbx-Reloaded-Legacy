@@ -1415,6 +1415,15 @@ static void CxbxrKrnlInitHacks()
 					d->vblank_pending.clear();
 					d->pcrtc.pending_interrupts |= NV_PCRTC_INTR_0_VBLANK;
 
+					// Increment VBlank counter during overlay (video) for RDTSC scaling.
+					// When enabled, RDTSC returns VBlank-counter-based ticks instead of
+					// real-time TSC, so the decoder's QPC timing check fires at exact
+					// VBlank boundaries instead of continuous time.
+					extern void IncrementOverlayVBlankCounter();
+					if (d->enable_overlay) {
+						IncrementOverlayVBlankCounter();
+					}
+
 					// Generate PVIDEO buffer completion interrupts for active overlay buffers.
 					// On real hardware, when the overlay is active, at each VBlank the PVIDEO
 					// engine fires an interrupt for the buffer that was just scanned out, allowing
