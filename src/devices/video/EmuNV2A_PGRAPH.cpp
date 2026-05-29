@@ -2310,7 +2310,6 @@ static unsigned int kelvin_map_texgen(uint32_t parameter, unsigned int channel)
 
 void pgraph_trigger_overlay_composite(NV2AState *d)
 {
-	if (!g_pgraph_backend.flip_stall) return;
 	qemu_mutex_lock(&d->pgraph.pgraph_lock);
 	g_pgraph_backend.flip_stall(d);
 	qemu_mutex_unlock(&d->pgraph.pgraph_lock);

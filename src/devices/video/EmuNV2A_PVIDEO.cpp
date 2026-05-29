@@ -84,9 +84,10 @@ DEVICE_WRITE32(PVIDEO)
 		d->pvideo.regs[RI(NV_PVIDEO_BUFFER)] = value;
 		d->enable_overlay = (value != 0);
 		pvideo_vga_invalidate(d);
-		// Composite overlay immediately on the game thread rather than
-		// deferring to the puller thread.  The puller holds pfifo_lock
-		// and may deadlock with the game thread over D3D11ContextLock.
+		// Trigger overlay compositing inline on the game thread.
+		// This matches the master (D3D9 HLE) branch where UpdateOverlay
+		// is a single synchronous call.  Bypasses the puller entirely
+		// to avoid the pfifo_lock/pgraph_lock deadlock.
 		if (d->enable_overlay && g_pgraph_backend.flip_stall) {
 			extern void pgraph_trigger_overlay_composite(NV2AState *d);
 			pgraph_trigger_overlay_composite(d);
