@@ -1027,21 +1027,18 @@ void ____YUY2ToARGBRow_C(const uint8_t* src_yuy2,
 
 			// B = y_scaled - u_ub + bb>>6, clamped to [0,255]
 			__m128i b16 = _mm_add_epi16(y_scaled, v_bb);
-			b16 = _mm_subs_epu16(b16, u_ub); // saturating subtract
-			b16 = _mm_min_epi16(b16, v_alpha);
+			b16 = _mm_subs_epu16(b16, u_ub); // saturating subtract clamps at 0
 
 			// G = y_scaled - u_ug - v_vg + bg>>6
 			__m128i g16 = _mm_add_epi16(y_scaled, v_bg);
 			g16 = _mm_subs_epu16(g16, u_ug);
 			g16 = _mm_subs_epu16(g16, v_vg_val);
-			g16 = _mm_min_epi16(g16, v_alpha);
 
 			// R = y_scaled - v_vr + br>>6
 			__m128i r16 = _mm_add_epi16(y_scaled, v_br);
 			r16 = _mm_subs_epu16(r16, v_vr_val);
-			r16 = _mm_min_epi16(r16, v_alpha);
 
-			// Pack 16→8 with saturation
+			// Pack 16→8 with unsigned saturation (clamps to [0,255])
 			__m128i b8 = _mm_packus_epi16(b16, v_zero); // 8 bytes in low half
 			__m128i g8 = _mm_packus_epi16(g16, v_zero);
 			__m128i r8 = _mm_packus_epi16(r16, v_zero);

@@ -213,6 +213,9 @@ int pfifo_puller_thread(NV2AState *d)
     CxbxSetThreadName("Cxbx NV2A FIFO puller");
     CxbxSetPullerContext(true);
 
+    static constexpr int DEFAULT_VBLANK_HZ = 60;
+    static constexpr DWORD OVERLAY_POLL_INTERVAL_MS = 16;
+
     qemu_mutex_lock(&d->pfifo.pfifo_lock);
     while (!d->exiting) {
         bool had_commands = pfifo_run_puller(d);
@@ -240,8 +243,7 @@ int pfifo_puller_thread(NV2AState *d)
                 LARGE_INTEGER now;
                 QueryPerformanceCounter(&now);
                 int64_t elapsed = now.QuadPart - d->overlay_last_present_qpc;
-                // ~16.67ms in QPC ticks (VBlank interval at 60Hz)
-                int64_t vblank_ticks = d->vblank_period > 0 ? d->vblank_period : (HostQPCFrequency / 60);
+                int64_t vblank_ticks = d->vblank_period > 0 ? d->vblank_period : (HostQPCFrequency / DEFAULT_VBLANK_HZ);
                 if (elapsed >= vblank_ticks) {
                     d->overlay_dirty = false;
                     d->overlay_last_present_qpc = now.QuadPart;
@@ -267,7 +269,7 @@ int pfifo_puller_thread(NV2AState *d)
         // Use timed wait (16ms) when overlay is active so rate-limited presents
         // fire at VBlank rate even without explicit signals.
         qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-        DWORD waitMs = (d->enable_overlay && d->overlay_dirty) ? 16 : INFINITE;
+        DWORD waitMs = (d->enable_overlay && d->overlay_dirty) ? OVERLAY_POLL_INTERVAL_MS : INFINITE;
         WaitForSingleObject(d->pfifo.puller_event, waitMs);
         qemu_mutex_lock(&d->pfifo.pfifo_lock);
     }
