@@ -43,22 +43,35 @@ DEVICE_READ32(USER)
 		uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
 		uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
 		if (get_v != put_v) {
-			if (d->enable_overlay) {
-				d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
-				get_v = put_v;
-			} else {
-				uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
-				uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
-				bool pusher_can_run = GET_MASK(push0, NV_PFIFO_CACHE1_PUSH0_ACCESS)
-				                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
-				                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
-				if (!pusher_can_run) {
-					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
-					get_v = put_v;
-				} else {
-					pfifo_flush_to_pgraph(d);
-					get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
+	if (d->enable_overlay) {
+		LARGE_INTEGER t0; QueryPerformanceCounter(&t0);
+		uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
+		if (channel_modes & (1 << channel_id)) {
+			unsigned int cur_channel_id =
+				GET_MASK(d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH1)],
+					NV_PFIFO_CACHE1_PUSH1_CHID);
+			if (channel_id == cur_channel_id) {
+				switch (addr & 0xFFFF) {
+				case NV_USER_DMA_PUT:
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
+					break;
+				case NV_USER_DMA_GET:
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = value;
+					break;
+				case NV_USER_REF:
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)] = value;
+					break;
+				default: break;
 				}
+			}
+		}
+		SetEvent(d->pfifo.puller_event);
+		{ LARGE_INTEGER t1; QueryPerformanceCounter(&t1); 
+		  double us = (double)(t1.QuadPart - t0.QuadPart); 
+		  extern void DumpUserTime(const char*, LARGE_INTEGER*);
+		  DumpUserTime("WR-overlay", &t0); }
+		DEVICE_WRITE32_END(USER);
+	}
 			}
 		}
 		uint32_t result = get_v;

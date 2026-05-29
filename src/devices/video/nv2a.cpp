@@ -234,6 +234,22 @@ uint32_t NV2ADevice::ResolveDmaBaseAddress(NV2AState *d, xbox::addr_xt dma_obj_a
 #include "EmuNV2A_PVIDEO.cpp"
 #include "EmuNV2A_USER.cpp" // pfifo_lock removed - force recompile
 
+static FILE* g_userprof = nullptr;
+static void DumpUserTime(const char* label, LARGE_INTEGER* start) {
+	LARGE_INTEGER end, freq;
+	QueryPerformanceCounter(&end);
+	QueryPerformanceFrequency(&freq);
+	double us = (double)(end.QuadPart - start->QuadPart) * 1000000.0 / (double)freq.QuadPart;
+	if (!g_userprof) g_userprof = fopen("C:\\temp\\cxbx_user.txt", "a");
+	if (g_userprof) {
+		static int count = 0;
+		if (++count <= 20 || us > 100.0) {
+			fprintf(g_userprof, "%s: %.1f us\n", label, us);
+			fflush(g_userprof);
+		}
+	}
+}
+
 #include "EmuNV2A_PRMA.cpp"
 #include "EmuNV2A_PCOUNTER.cpp"
 #include "EmuNV2A_PVPE.cpp"
