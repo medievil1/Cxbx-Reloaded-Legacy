@@ -58,6 +58,7 @@ ID3D11Texture2D *g_pOverlayTex = nullptr;
 
 void CxbxReleaseOverlayResources()
 {
+	FUNC_PROFILE_DUMP(); // Dump per-function timing when video overlay ends
 	g_OverlayTexWidth = 0;
 	g_OverlayTexHeight = 0;
 	if (g_pOverlayTex) { g_pOverlayTex->Release(); g_pOverlayTex = nullptr; }

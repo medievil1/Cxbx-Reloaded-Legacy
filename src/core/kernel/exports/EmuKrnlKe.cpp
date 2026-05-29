@@ -82,6 +82,7 @@ namespace NtDll
 #include "core\kernel\support\EmuFile.h" // For IsEmuHandle(), NtStatusToString()
 #include "core\kernel\support\NativeHandle.h"
 #include "Timer.h"
+#include "common/FuncProfile.h"
 #include "Util.h"
 #include "devices/video/nv2a.h" // For NV2ADevice, NV_PCRTC_INTR_0_VBLANK
 #include "devices/Xbox.h"      // For g_NV2A
@@ -548,6 +549,7 @@ void InitDpcData()
 
 ULONGLONG CxbxGetPerformanceCounter(bool acpi)
 {
+	FUNC_PROFILE("CxbxGetPerfCtr");
 	const int64_t period = acpi ? XBOX_ACPI_FREQUENCY : XBOX_TSC_FREQUENCY;
 	return Timer_GetScaledPerformanceCounter(period);
 }

@@ -1338,8 +1338,12 @@ bool EmuX86_Opcode_PUSH(LPEXCEPTION_POINTERS e, _DInst& info)
 	return true;
 }
 
+#include "common/Timer.h"
+#include "common/FuncProfile.h"
+
 void EmuX86_Opcode_RDTSC(LPEXCEPTION_POINTERS e)
 {
+	FUNC_PROFILE("RDTSC");
 	// We use CxbxGetPerformanceCounter. KeQueryPerformanceCounter is a differnet frequency and cannot be used!
 	ULARGE_INTEGER PerformanceCount;
 	PerformanceCount.QuadPart = CxbxGetPerformanceCounter(/*acpi*/false);

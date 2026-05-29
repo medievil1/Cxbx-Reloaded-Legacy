@@ -43,6 +43,7 @@
 // addresses it with: byteOffset = xboxPhysAddr & 0x07FFFFFF.
 
 #include "Backend_D3D11_Internal.h"
+#include "common/FuncProfile.h"
 #include "Backend_D3D11_PageTracker.h"
 #include "common/AddressRanges.h"
 #include "common/win32/WineEnv.h"
@@ -245,6 +246,7 @@ static ID3D11Texture2D* CreateStagingForRT(ID3D11Texture2D* pTexture);
 // Returns true if the fault was handled (page committed/restored).
 bool CxbxPageTrackerHandleFault(void* faultAddress, bool isWrite)
 {
+	FUNC_PROFILE("PageTrackerFault");
 	uintptr_t addr = (uintptr_t)faultAddress;
 
 	// --- Tiled memory redirect (0xF0000000 - 0xF3FFFFFF) ---
@@ -404,6 +406,7 @@ bool CxbxPageTrackerHandleFault(void* faultAddress, bool isWrite)
 // ******************************************************************
 static void SyncTiledPagesBack()
 {
+	FUNC_PROFILE("SyncTiledPagesBack");
 	if (!s_bHasTiledPages)
 		return;
 
