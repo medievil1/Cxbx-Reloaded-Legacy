@@ -48,19 +48,26 @@ DEVICE_READ32(USER)
 		uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
 		uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
 		if (get_v != put_v) {
-			uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
-			uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
-			bool pusher_can_run = GET_MASK(push0, NV_PFIFO_CACHE1_PUSH0_ACCESS)
-			                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
-			                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
-			if (!pusher_can_run) {
+			// During overlay (video playback), skip inline pushbuffer
+			// processing — advance GET to PUT so the game sees the GPU
+			// as idle immediately.  pfifo_flush_to_pgraph → pfifo_run_pusher
+			// would process hundreds of pending methods, costing 93ms.
+			if (d->enable_overlay) {
 				d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
 				get_v = put_v;
 			} else {
-				// Drain pending commands inline — enables native
-				// BlockUntilIdle polling to work without a patch.
-				pfifo_flush_to_pgraph(d);
-				get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
+				uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
+				uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
+				bool pusher_can_run = GET_MASK(push0, NV_PFIFO_CACHE1_PUSH0_ACCESS)
+				                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
+				                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
+				if (!pusher_can_run) {
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
+					get_v = put_v;
+				} else {
+					pfifo_flush_to_pgraph(d);
+					get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
+				}
 			}
 		}
 		uint32_t result = get_v;
@@ -130,6 +137,35 @@ DEVICE_WRITE32(USER)
 {
 	unsigned int channel_id = addr >> 16;
 	assert(channel_id < NV2A_NUM_CHANNELS);
+
+	// During overlay (video playback), skip the pfifo_lock entirely.
+	// The game's D3D runtime writes DMA_PUT/GET/REF registers through
+	// this handler ~900 times per session.  Each lock acquisition blocks
+	// for up to 11ms while the puller holds pfifo_lock.  The writes are
+	// 32-bit atomic register stores — no lock needed during video.
+	if (d->enable_overlay) {
+		uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
+		if (channel_modes & (1 << channel_id)) {
+			unsigned int cur_channel_id =
+				GET_MASK(d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH1)],
+					NV_PFIFO_CACHE1_PUSH1_CHID);
+			if (channel_id == cur_channel_id) {
+				switch (addr & 0xFFFF) {
+				case NV_USER_DMA_PUT:
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
+					break;
+				case NV_USER_DMA_GET:
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = value;
+					break;
+				case NV_USER_REF:
+					d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)] = value;
+					break;
+				default: break;
+				}
+			}
+		}
+		DEVICE_WRITE32_END(USER);
+	}
 
 	qemu_mutex_lock(&d->pfifo.pfifo_lock);
 
