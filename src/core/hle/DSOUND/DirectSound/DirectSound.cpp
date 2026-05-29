@@ -542,7 +542,7 @@ xbox::hresult_xt WINAPI xbox::EMUPATCH(CDirectSound_CommitDeferredSettings)
 {
     DSoundMutexGuardLock;
 
-	LOG_FUNC_ONE_ARG(pThis);
+	//LOG_FUNC_ONE_ARG(pThis); // Disabled: prevents log flooding from tight polling loops
 
     HRESULT hRet = DS_OK;
     if (g_pDSoundPrimary3DListener8 != nullptr) {
@@ -574,7 +574,7 @@ xbox::hresult_xt WINAPI xbox::EMUPATCH(IDirectSound_CommitDeferredSettings)
 {
     DSoundMutexGuardLock;
 
-    LOG_FORWARD("CDirectSound_CommitDeferredSettings");
+    //LOG_FORWARD("CDirectSound_CommitDeferredSettings"); // Disabled: prevents log flooding from tight polling loops
 
     return xbox::EMUPATCH(CDirectSound_CommitDeferredSettings)(pThis);
 }
