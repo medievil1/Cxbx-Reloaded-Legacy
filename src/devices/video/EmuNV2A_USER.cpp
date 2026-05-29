@@ -138,12 +138,12 @@ DEVICE_WRITE32(USER)
 	unsigned int channel_id = addr >> 16;
 	assert(channel_id < NV2A_NUM_CHANNELS);
 
-	// During overlay (video playback), skip the pfifo_lock entirely.
-	// The game's D3D runtime writes DMA_PUT/GET/REF registers through
-	// this handler ~900 times per session.  Each lock acquisition blocks
-	// for up to 11ms while the puller holds pfifo_lock.  The writes are
-	// 32-bit atomic register stores — no lock needed during video.
-	if (d->enable_overlay) {
+	// During overlay (video playback), the puller thread holds pfifo_lock
+	// frequently.  Use TryEnter to avoid blocking for 11-14ms per write.
+	// If the lock is free, process normally.  If contended, just write the
+	// register directly (32-bit atomic) and wake the puller.
+	bool locked = TryEnterCriticalSection(&d->pfifo.pfifo_lock.lock);
+	if (!locked && d->enable_overlay) {
 		uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
 		if (channel_modes & (1 << channel_id)) {
 			unsigned int cur_channel_id =
@@ -164,10 +164,13 @@ DEVICE_WRITE32(USER)
 				}
 			}
 		}
+		SetEvent(d->pfifo.puller_event);
 		DEVICE_WRITE32_END(USER);
 	}
 
-	qemu_mutex_lock(&d->pfifo.pfifo_lock);
+	if (!locked) {
+		qemu_mutex_lock(&d->pfifo.pfifo_lock);
+	}
 
 	uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
 	if (channel_modes & (1 << channel_id)) {
