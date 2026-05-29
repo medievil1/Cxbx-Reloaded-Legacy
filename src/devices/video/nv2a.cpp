@@ -593,21 +593,29 @@ void NV2ADevice::IOWrite(int barIndex, uint32_t port, uint32_t value, unsigned s
 
 uint32_t NV2ADevice::BlockRead(const NV2ABlockInfo* block, uint32_t addr, unsigned size)
 {
-	FUNC_PROFILE("NV2ABlockRead");
 	switch (size) {
-	case sizeof(uint8_t) :
+	case sizeof(uint8_t) : {
+		char name[64];
+		snprintf(name, sizeof(name), "NV2ARd-%s", block->name ? block->name : "?");
+		FUNC_PROFILE(name);
 		return block->ops.read(m_nv2a_state, addr - block->offset) & 0xFF;
-	case sizeof(uint16_t) :
-		assert((addr & 1) == 0); // TODO : What if this fails?	
-
+	}
+	case sizeof(uint16_t) : {
+		assert((addr & 1) == 0);
+		char name[64];
+		snprintf(name, sizeof(name), "NV2ARd-%s", block->name ? block->name : "?");
+		FUNC_PROFILE(name);
 		return block->ops.read(m_nv2a_state, addr - block->offset) & 0xFFFF;
-	case sizeof(uint32_t) :
-		assert((addr & 3) == 0); // TODO : What if this fails?	
-
+	}
+	case sizeof(uint32_t) : {
+		assert((addr & 3) == 0);
+		char name[64];
+		snprintf(name, sizeof(name), "NV2ARd-%s", block->name ? block->name : "?");
+		FUNC_PROFILE(name);
 		return block->ops.read(m_nv2a_state, addr - block->offset);
+	}
 	default:
 		assert(false);
-
 		return 0;
 	}
 }
