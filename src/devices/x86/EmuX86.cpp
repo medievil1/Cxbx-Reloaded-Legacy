@@ -608,6 +608,7 @@ bool EmuX86_Operand_Addr_ForReadWrite(const LPEXCEPTION_POINTERS e, const _DInst
 
 uint32_t EmuX86_Addr_Read(const OperandAddress &opAddr)
 {
+	FUNC_PROFILE("AddrRead");
 	assert(opAddr.size == sizeof(uint8_t) || opAddr.size == sizeof(uint16_t) || opAddr.size == sizeof(uint32_t));
 
 	if (opAddr.is_internal_addr) {
@@ -632,6 +633,7 @@ void EmuX86_Addr_Write(const OperandAddress &opAddr, const uint32_t value)
 
 bool EmuX86_Operand_Read(const LPEXCEPTION_POINTERS e, const _DInst& info, const int operand, OUT uint32_t *value)
 {
+	FUNC_PROFILE("OperandRead");
 	OperandAddress opAddr;
 	if (EmuX86_Operand_Addr_ForReadOnly(e, info, operand, OUT opAddr)) {
 		*value = EmuX86_Addr_Read(opAddr);
@@ -2998,15 +3000,22 @@ int EmuX86_OpcodeSize(uint8_t *Eip)
 bool EmuX86_DecodeException(LPEXCEPTION_POINTERS e)
 {
 	// Decoded instruction information.
-	// Opcode handler note : 
-	// If an opcode or one of it's operand can't be decoded, that's a clear failure.
-	// However, if for any reason, an opcode operand cannot be read from or written to,
-	// that case may be logged, but it shouldn't fail the opcode handler.
 	_DInst info;
 	DWORD StartingEip = e->ContextRecord->Eip;
 	LOG_CHECK_ENABLED(LOG_LEVEL::DEBUG) {
 		EmuLog(LOG_LEVEL::DEBUG, "Starting instruction emulation from 0x%08X", e->ContextRecord->Eip);
 	}
+
+	for (int x=0;x<1;x++)
+	{
+		{
+			FUNC_PROFILE("DecodeOpcode");
+			if (!EmuX86_DecodeOpcode((uint8_t*)e->ContextRecord->Eip, info)) {
+				EmuLog(LOG_LEVEL::WARNING, "Error decoding opcode at 0x%08X", e->ContextRecord->Eip);
+				assert(false);
+				return false;
+			}
+		}
 
 	// Execute op-codes until we hit an unhandled instruction, or an error occurs
 	//while (true)
