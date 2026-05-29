@@ -30,7 +30,6 @@
 
 #include "common\Settings.hpp" // for g_LibVersion_D3D8
 #include "core\kernel\support\Emu.h"
-#include <emmintrin.h> // SSE2
 
 #include "XbConvert.h"
 
@@ -951,115 +950,9 @@ void ____YUY2ToARGBRow_C(const uint8_t* src_yuy2,
 	int width) {
 	const struct YuvConstants* yuvconstants = &kYuvIConstants; // hack to avoid another argument
 
-	// SSE2 fast path: process 8 pixels (16 bytes input → 32 bytes output) per iteration.
-	// Uses fixed-point 8.8 arithmetic matching the C reference above.
-	// All x86 CPUs since Pentium 4 support SSE2 (Xbox dev machines certainly do).
 	int x = 0;
-	if (width >= 8) {
-		// Pre-compute constants as 16-bit signed vectors
-		const int ub = yuvconstants->kUVToB[0];
-		const int ug = yuvconstants->kUVToG[0];
-		const int vg = yuvconstants->kUVToG[1];
-		const int vr = yuvconstants->kUVToR[1];
-		const int bb = yuvconstants->kUVBiasB[0];
-		const int bg = yuvconstants->kUVBiasG[0];
-		const int br = yuvconstants->kUVBiasR[0];
-		const int yg = yuvconstants->kYToRgb[0];
 
-		__m128i v_ub = _mm_set1_epi16((short)ub);
-		__m128i v_ug = _mm_set1_epi16((short)ug);
-		__m128i v_vg = _mm_set1_epi16((short)vg);
-		__m128i v_vr = _mm_set1_epi16((short)vr);
-		__m128i v_bb = _mm_set1_epi16((short)(bb >> 6));
-		__m128i v_bg = _mm_set1_epi16((short)(bg >> 6));
-		__m128i v_br = _mm_set1_epi16((short)(br >> 6));
-		__m128i v_yg = _mm_set1_epi16((short)yg);
-		__m128i v_zero = _mm_setzero_si128();
-		__m128i v_alpha = _mm_set1_epi16(255);
-
-		for (; x <= width - 8; x += 8) {
-			// Load 16 bytes of YUY2: Y0 U0 Y1 V0 Y2 U1 Y3 V1 Y4 U2 Y5 V2 Y6 U3 Y7 V3
-			__m128i yuy2 = _mm_loadu_si128((const __m128i*)src_yuy2);
-
-			// Extract Y values (every other byte starting at 0): positions 0,2,4,6,8,10,12,14
-			// Extract U values (bytes 1,5,9,13) and V values (bytes 3,7,11,15)
-			// Deinterleave: even bytes = Y, odd bytes at positions 1,5,9,13 = U, 3,7,11,15 = V
-			// Simpler approach: process 4 pixels at a time (2 YUY2 macro-pixels)
-			// Actually, 16 bytes = 4 macro-pixels = 8 pixels
-
-			// Process pixel by pixel in pairs using SSE2 for the math
-			// Extract all 8 Y values, 4 U values (duplicated), 4 V values (duplicated)
-			uint8_t y0 = src_yuy2[0], u0 = src_yuy2[1], y1 = src_yuy2[2], v0 = src_yuy2[3];
-			uint8_t y2 = src_yuy2[4], u1 = src_yuy2[5], y3 = src_yuy2[6], v1 = src_yuy2[7];
-			uint8_t y4 = src_yuy2[8], u2 = src_yuy2[9], y5 = src_yuy2[10], v2 = src_yuy2[11];
-			uint8_t y6 = src_yuy2[12], u3 = src_yuy2[13], y7 = src_yuy2[14], v3 = src_yuy2[15];
-
-			// Pack Y values into 16-bit, multiply by yg, shift
-			__m128i ys = _mm_set_epi16(y7, y6, y5, y4, y3, y2, y1, y0);
-			// y1_val = (y * 0x0101 * yg) >> 16  -- simplify: (y * yg * 257) >> 16
-			// In 16-bit: approximate as (y * yg) >> 8  won't overflow since y<=255, yg<=255
-			// Actually let's do it properly: y * 0x0101 overflows 16-bit, use 32-bit per pair
-			// Simpler: just use the scalar constants and pack results
-
-			// For each pixel: y1 = (Y * 257 * yg) >> 16
-			// B = clamp((-U*ub + y1 + bb) >> 6)
-			// G = clamp((-(U*ug + V*vg) + y1 + bg) >> 6)
-			// R = clamp((-V*vr + y1 + br) >> 6)
-
-			// Compute in 16-bit with pre-shifted bias (bb>>6 etc already done above)
-			// y_scaled = (Y * yg) >> 8  (approximation of (Y*257*yg)>>16)
-			__m128i y_scaled = _mm_mullo_epi16(ys, v_yg);
-			y_scaled = _mm_srli_epi16(y_scaled, 8);
-
-			// U values duplicated for each pair
-			__m128i us = _mm_set_epi16(u3, u3, u2, u2, u1, u1, u0, u0);
-			__m128i vs = _mm_set_epi16(v3, v3, v2, v2, v1, v1, v0, v0);
-
-			// u_ub = U * ub (all 16-bit)
-			__m128i u_ub = _mm_mullo_epi16(us, v_ub);
-			u_ub = _mm_srli_epi16(u_ub, 6);
-			__m128i u_ug = _mm_mullo_epi16(us, v_ug);
-			u_ug = _mm_srli_epi16(u_ug, 6);
-			__m128i v_vg_val = _mm_mullo_epi16(vs, v_vg);
-			v_vg_val = _mm_srli_epi16(v_vg_val, 6);
-			__m128i v_vr_val = _mm_mullo_epi16(vs, v_vr);
-			v_vr_val = _mm_srli_epi16(v_vr_val, 6);
-
-			// B = y_scaled - u_ub + bb>>6, clamped to [0,255]
-			__m128i b16 = _mm_add_epi16(y_scaled, v_bb);
-			b16 = _mm_subs_epu16(b16, u_ub); // saturating subtract clamps at 0
-
-			// G = y_scaled - u_ug - v_vg + bg>>6
-			__m128i g16 = _mm_add_epi16(y_scaled, v_bg);
-			g16 = _mm_subs_epu16(g16, u_ug);
-			g16 = _mm_subs_epu16(g16, v_vg_val);
-
-			// R = y_scaled - v_vr + br>>6
-			__m128i r16 = _mm_add_epi16(y_scaled, v_br);
-			r16 = _mm_subs_epu16(r16, v_vr_val);
-
-			// Pack 16→8 with unsigned saturation (clamps to [0,255])
-			__m128i b8 = _mm_packus_epi16(b16, v_zero); // 8 bytes in low half
-			__m128i g8 = _mm_packus_epi16(g16, v_zero);
-			__m128i r8 = _mm_packus_epi16(r16, v_zero);
-			__m128i a8 = _mm_packus_epi16(v_alpha, v_zero);
-
-			// Interleave to BGRA (output format is B8G8R8A8 / ARGB in DXGI naming)
-			__m128i bg_lo = _mm_unpacklo_epi8(b8, g8); // B0G0 B1G1 B2G2 B3G3 ...
-			__m128i ra_lo = _mm_unpacklo_epi8(r8, a8); // R0A0 R1A1 R2A2 R3A3 ...
-
-			__m128i px_0123 = _mm_unpacklo_epi16(bg_lo, ra_lo); // B0G0R0A0 B1G1R1A1 B2G2R2A2 B3G3R3A3
-			__m128i px_4567 = _mm_unpackhi_epi16(bg_lo, ra_lo); // B4G4R4A4 B5G5R5A5 B6G6R6A6 B7G7R7A7
-
-			_mm_storeu_si128((__m128i*)rgb_buf, px_0123);
-			_mm_storeu_si128((__m128i*)(rgb_buf + 16), px_4567);
-
-			src_yuy2 += 16;
-			rgb_buf += 32;
-		}
-	}
-
-	// Scalar tail for remaining pixels
+	// Scalar conversion: process 2 pixels (one YUY2 macro-pixel) per iteration
 	for (; x < width - 1; x += 2) {
 		YuvPixel(src_yuy2[0], src_yuy2[1], src_yuy2[3],
 			rgb_buf + 0, rgb_buf + 1, rgb_buf + 2, yuvconstants);
