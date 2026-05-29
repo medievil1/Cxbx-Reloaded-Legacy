@@ -147,13 +147,14 @@ static bool pfifo_run_puller(NV2AState *d)
     uint32_t *get_reg = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_GET)];
     uint32_t *put_reg = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUT)];
 
-    // Acquire pgraph_lock once for the entire CACHE1 drain rather than per
-    // method.  Eliminates N-1 redundant lock/unlock pairs per puller wake.
-    // pgraph_handle_method may internally release/reacquire for waits (e.g.
-    // NV097_NO_OPERATION interrupt handshake), which is safe because
-    // QemuMutex wraps CRITICAL_SECTION (see thread-win32.h) — reentrant
-    // by definition on Windows.
-    qemu_mutex_lock(&d->pgraph.pgraph_lock);
+    // Try to acquire pgraph_lock.  If the game thread holds it (for PGRAPH
+    // register writes like NV_PGRAPH_INCREMENT), skip CACHE1 processing this
+    // cycle rather than blocking.  Holding pfifo_lock (acquired by the caller)
+    // while waiting for pgraph_lock creates a lock-ordering deadlock with the
+    // game thread which holds pgraph_lock → waits for pfifo_lock.
+    if (!TryEnterCriticalSection(&d->pgraph.pgraph_lock.lock)) {
+        return false;
+    }
 
     while (true) {
         if (!GET_MASK(*pull0, NV_PFIFO_CACHE1_PULL0_ACCESS)) break;
