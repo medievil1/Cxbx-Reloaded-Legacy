@@ -86,7 +86,10 @@ struct CMcpxVoiceClient: CUnknownTemplate {
     // CUnknownTemplate                                     // 0x00 - ???
     struct _settings
     {
-        uint32_t            Unknown2[(0x300-8)/4];          // 0x08 - ???
+        uint32_t            Unknown2_pre[(0x30-8)/4];       // 0x08 - 0x30
+        uint32_t            dwBufferAllocSize;              // 0x30 - buffer size (read by games that poll hardware)
+        uint32_t            pPlayCursor;                    // 0x34 - pointer to DWORD play cursor (games dereference this)
+        uint32_t            Unknown2_post[(0x300-0x38)/4];  // 0x38 - 0x300
     }
     settings;
 
