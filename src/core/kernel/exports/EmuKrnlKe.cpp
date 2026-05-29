@@ -504,13 +504,26 @@ void ExecuteDpcQueue(bool inline_dispatch)
 		return;
 	}
 
-	// Are there entries in the DpqQueue?
+	// Snapshot the current queue tail so we only process DPCs that were
+	// queued at entry time.  If a DPC routine re-queues itself (or queues
+	// new DPCs), those entries are appended AFTER this sentinel and will
+	// NOT be dispatched in this pass — they'll be picked up by the next
+	// DPC dispatch cycle (triggered by HalRequestSoftwareInterrupt).
+	// This prevents infinite loops when a DPC unconditionally re-queues itself.
+	PLIST_ENTRY sentinel = g_DpcData.DpcQueue.Blink;
+
+	// Are there entries in the DpcQueue?
 	while (!IsListEmpty(&(g_DpcData.DpcQueue)))
 	{
 		// Extract the head entry and retrieve the containing KDPC pointer for it:
-		pkdpc = CONTAINING_RECORD(RemoveHeadList(&(g_DpcData.DpcQueue)), xbox::KDPC, DpcListEntry);
+		PLIST_ENTRY headEntry = RemoveHeadList(&(g_DpcData.DpcQueue));
+		pkdpc = CONTAINING_RECORD(headEntry, xbox::KDPC, DpcListEntry);
 		// Mark it as no longer linked into the DpcQueue
 		pkdpc->Inserted = FALSE;
+
+		// Determine if this was the last entry we should process this pass
+		bool was_last = (headEntry == sentinel);
+
 		// Set per-thread DpcRoutineActive for re-entrancy protection and
 		// KeIsExecutingDpc reporting. Don't touch g_DpcRoutineActive here —
 		// it's reserved for game-level suppression (fs:0x58 writes) and the
@@ -529,10 +542,20 @@ void ExecuteDpcQueue(bool inline_dispatch)
 
 		EnterCriticalSection(&(g_DpcData.Lock));
 		KeGetCurrentPrcb()->DpcRoutineActive = FALSE;
+
+		// Stop after processing all entries that were queued at entry time.
+		// Newly queued DPCs will be handled in the next dispatch cycle.
+		if (was_last) {
+			break;
+		}
 	}
 
-	// NOTE: IsDpcPending is now cleared at the start of the DPC loop iteration
-	// (in CxbxKrnlMain) to prevent lost-wake races. Do NOT clear it here.
+	// If there are still DPCs in the queue (added during this dispatch pass),
+	// re-signal IsDpcPending so the background DPC thread wakes to process them.
+	if (!IsListEmpty(&(g_DpcData.DpcQueue))) {
+		g_DpcData.IsDpcPending.test_and_set();
+		g_DpcData.IsDpcPending.notify_one();
+	}
 
 	LeaveCriticalSection(&(g_DpcData.Lock));
 }
