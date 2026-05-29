@@ -622,6 +622,7 @@ uint32_t EmuX86_Addr_Read(const OperandAddress &opAddr)
 
 void EmuX86_Addr_Write(const OperandAddress &opAddr, const uint32_t value)
 {
+	FUNC_PROFILE("AddrWrite");
 	assert(opAddr.size == sizeof(uint8_t) || opAddr.size == sizeof(uint16_t) || opAddr.size == sizeof(uint32_t));
 
 	if (opAddr.is_internal_addr) {
