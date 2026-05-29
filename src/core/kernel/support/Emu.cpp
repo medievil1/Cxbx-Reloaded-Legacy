@@ -40,6 +40,7 @@
 #include "core\hle\D3D8\Rendering\Backend\Backend_D3D11_PageTracker.h"
 #include <common/Timer.h>
 #include <cstdio>
+#include "common/FuncProfile.h"
 
 #include <Dbghelp.h>
 #include <TlHelp32.h>
@@ -319,7 +320,11 @@ long WINAPI lleException(EXCEPTION_POINTERS *e)
 
 	// LLE exception handling
 	g_bEmuException = true;
-	long result = lleTryHandleException(e) ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+	long result;
+	{
+		FUNC_PROFILE("LLEXception");
+		result = lleTryHandleException(e) ? EXCEPTION_CONTINUE_EXECUTION : EXCEPTION_CONTINUE_SEARCH;
+	}
 	g_bEmuException = false;
 	return result;
 }
