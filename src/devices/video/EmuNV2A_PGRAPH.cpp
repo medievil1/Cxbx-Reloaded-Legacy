@@ -664,16 +664,42 @@ void pgraph_handle_method(NV2AState *d,
 				qemu_mutex_lock(&d->pgraph.pgraph_lock);
 			}
 
-			// Overlay compositing — the game's BlockUntilVerticalBlank already
-			// handles VBlank synchronization on the game thread.  Adding a
-			// second VBlank wait here (via SleepPrecise) doubles the per-frame
-			// latency, causing the game's video manager to run at half the
-			// intended update rate (20-30 Hz instead of 60 Hz).
-			// On the master (D3D9 HLE) branch UpdateOverlay is a single
-			// synchronous D3D9 call — no thread sync, no extra VBlank wait,
-			// which is why XMV video plays at full speed there.
-			qemu_mutex_unlock(&d->pgraph.pgraph_lock);
-			qemu_mutex_lock(&d->pgraph.pgraph_lock);
+			// VBlank-gated frame pacing: wait until the next VBlank deadline.
+			// Advance the anchor by the period (rather than using the wake QPC)
+			// to keep the schedule locked to the ideal frame cadence even when
+			// SleepPrecise wakes slightly late.  Only resync to the wake QPC if
+			// we fell behind by multiple periods (e.g. after a system stall).
+			{
+				static int64_t s_flipStallAnchor = 0;
+				unsigned int totalLines = pcrtc_get_total_lines(d);
+				unsigned int refreshRate = pcrtc_get_refresh_rate(d, totalLines);
+				int64_t vblankPeriodTicks = HostQPCFrequency / refreshRate;
+
+				// Seed anchor from the real VBlank timestamp on first call,
+				// or reseed if it's fallen too far behind (e.g. after a stall).
+				int64_t lastVBlank = d->vblank_last_qpc.load(std::memory_order_acquire);
+				if (s_flipStallAnchor == 0) {
+					LARGE_INTEGER now;
+					QueryPerformanceCounter(&now);
+					if (now.QuadPart - lastVBlank > vblankPeriodTicks * 2) {
+						s_flipStallAnchor = lastVBlank;
+					}
+				}
+
+				if (s_flipStallAnchor > 0) {
+					int64_t nextVBlankQPC = s_flipStallAnchor + vblankPeriodTicks;
+					qemu_mutex_unlock(&d->pgraph.pgraph_lock);
+					int64_t wakeQPC = SleepPrecise(nextVBlankQPC);
+					qemu_mutex_lock(&d->pgraph.pgraph_lock);
+
+					// Advance anchor by one period to maintain ideal cadence.
+					s_flipStallAnchor += vblankPeriodTicks;
+					// Resync if we fell behind by more than one period.
+					if (wakeQPC > s_flipStallAnchor + vblankPeriodTicks) {
+						s_flipStallAnchor = wakeQPC;
+					}
+				}
+			}
 
 			NV2A_DPRINTF("flip stall done\n");
 			break;
