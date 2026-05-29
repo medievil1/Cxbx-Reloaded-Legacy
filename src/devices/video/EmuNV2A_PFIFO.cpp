@@ -771,6 +771,18 @@ int pfifo_pusher_thread(NV2AState *d)
             qemu_cond_signal(&d->pfifo.flush_complete_cond);
         }
 
+        // Check for pending work before sleeping.  cond_signal is a no-op if
+        // we aren't waiting, so new DMA_PUT writes that arrived while
+        // pfifo_run_pusher was running (lock released) would be lost without
+        // this predicate check.
+        {
+            uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
+            uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
+            if (get_v != put_v) {
+                continue; // More work arrived — process it immediately
+            }
+        }
+
         qemu_cond_wait(&d->pfifo.pusher_cond, &d->pfifo.pfifo_lock);
 
         if (d->exiting) {
