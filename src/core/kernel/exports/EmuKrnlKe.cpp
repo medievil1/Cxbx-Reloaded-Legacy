@@ -510,13 +510,13 @@ void ExecuteDpcQueue(bool inline_dispatch)
 	// NOT be dispatched in this pass — they'll be picked up by the next
 	// DPC dispatch cycle (triggered by HalRequestSoftwareInterrupt).
 	// This prevents infinite loops when a DPC unconditionally re-queues itself.
-	PLIST_ENTRY sentinel = g_DpcData.DpcQueue.Blink;
+	xbox::PLIST_ENTRY sentinel = g_DpcData.DpcQueue.Blink;
 
 	// Are there entries in the DpcQueue?
 	while (!IsListEmpty(&(g_DpcData.DpcQueue)))
 	{
 		// Extract the head entry and retrieve the containing KDPC pointer for it:
-		PLIST_ENTRY headEntry = RemoveHeadList(&(g_DpcData.DpcQueue));
+		xbox::PLIST_ENTRY headEntry = RemoveHeadList(&(g_DpcData.DpcQueue));
 		pkdpc = CONTAINING_RECORD(headEntry, xbox::KDPC, DpcListEntry);
 		// Mark it as no longer linked into the DpcQueue
 		pkdpc->Inserted = FALSE;
