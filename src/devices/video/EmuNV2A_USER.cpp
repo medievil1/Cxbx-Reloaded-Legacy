@@ -131,18 +131,6 @@ DEVICE_WRITE32(USER)
 				switch (addr & 0xFFFF) {
 				case NV_USER_DMA_PUT:
 					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
-					{
-						uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
-						uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
-						bool pusher_can_run = GET_MASK(push0, NV_PFIFO_CACHE1_PUSH0_ACCESS)
-						                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
-						                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
-						if (pusher_can_run) {
-							CxbxSetPullerContext(true);
-							pfifo_run_pusher(d);
-							CxbxSetPullerContext(false);
-						}
-					}
 					break;
 				case NV_USER_DMA_GET:
 					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = value;
