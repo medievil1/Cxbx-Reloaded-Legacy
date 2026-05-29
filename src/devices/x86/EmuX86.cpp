@@ -3077,116 +3077,116 @@ bool EmuX86_DecodeException(LPEXCEPTION_POINTERS e)
 			}
 			case I_JA: { // = 166 : Jump if above (CF=0 and ZF=0).
 				if (EmuX86_Opcode_Jcc(e, info, !EmuX86_HasFlag_CF(e) && !EmuX86_HasFlag_ZF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JAE: { // = 147 : Jump if above or equal (CF=0).
 				if (EmuX86_Opcode_Jcc(e, info, !EmuX86_HasFlag_CF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JB: { // = 143 : Jump if below (CF=1).
 				if (EmuX86_Opcode_Jcc(e, info, EmuX86_HasFlag_CF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JBE: { // = 161 : Jump if below or equal (CF=1 or ZF=1).
 				if (EmuX86_Opcode_Jcc(e, info, EmuX86_HasFlag_CF(e) || EmuX86_HasFlag_ZF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JCXZ: { // = 427 : Jump if CX register is 0.
 				if (EmuX86_Opcode_Jcc(e, info, ((e->ContextRecord->Ecx & 0xFF) == 0))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JECXZ: { // = 433 : Jump if ECX register is 0.
 				if (EmuX86_Opcode_Jcc(e, info, e->ContextRecord->Ecx == 0)) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JG: { // = 202 : Jump if greater (ZF=0 and SF=OF).
 				if (EmuX86_Opcode_Jcc(e, info, !EmuX86_HasFlag_ZF(e) && (EmuX86_HasFlag_SF(e) == EmuX86_HasFlag_OF(e)))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JGE: { // = 192 : Jump if greater or equal (SF=OF).
 				if (EmuX86_Opcode_Jcc(e, info, EmuX86_HasFlag_SF(e) == EmuX86_HasFlag_OF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JL: { // = 188 : Jump if less (SF<>OF).
 				if (EmuX86_Opcode_Jcc(e, info, EmuX86_HasFlag_SF(e) != EmuX86_HasFlag_OF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JLE: { // = 197 : Jump if less or equal (ZF=1 or SF<>OF).
 				if (EmuX86_Opcode_Jcc(e, info, EmuX86_HasFlag_ZF(e) || (EmuX86_HasFlag_SF(e) != EmuX86_HasFlag_OF(e)))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JMP: // = 462 : 	Jump
 			case I_JMP_FAR: { // = 467 : Jump
 				if (EmuX86_Opcode_JMP(e, info)) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JNO: { // = 138 : Jump if not overflow (OF=0).
 				if (EmuX86_Opcode_Jcc(e, info, !EmuX86_HasFlag_OF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JNP: { // = 183 : Jump if not parity (PF=0).
 				if (EmuX86_Opcode_Jcc(e, info, !EmuX86_HasFlag_PF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JNS: { // = 174 : Jump if not sign (SF=0).
 				if (EmuX86_Opcode_Jcc(e, info, !EmuX86_HasFlag_SF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JNZ: { // = 156 : Jump if not zero (ZF=0).
 				if (EmuX86_Opcode_Jcc(e, info, !EmuX86_HasFlag_ZF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JO: { // = 134 : Jump if overflow (OF=1).
 				if (EmuX86_Opcode_Jcc(e, info, EmuX86_HasFlag_OF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JP: { // = 179 : Jump if parity (PF=1).
 				if (EmuX86_Opcode_Jcc(e, info, EmuX86_HasFlag_PF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JS: { // = 170 : Jump if sign (SF=1).
 				if (EmuX86_Opcode_Jcc(e, info, EmuX86_HasFlag_SF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
 			case I_JZ: { // = 152 : Jump if zero (ZF = 1).
 				if (EmuX86_Opcode_Jcc(e, info, EmuX86_HasFlag_ZF(e))) {
-					continue;
+					break;
 				}
 				break;
 			}
@@ -3340,7 +3340,7 @@ bool EmuX86_DecodeException(LPEXCEPTION_POINTERS e)
 				while (counter != 0) {
 					if (EmuX86_Opcode_STOS(e, info)) {
 						counter--;
-						continue;
+						break;
 					}
 
 					goto opcode_error;
