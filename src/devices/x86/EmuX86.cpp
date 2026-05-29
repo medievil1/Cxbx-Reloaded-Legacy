@@ -42,6 +42,7 @@
 #include "devices\x86\EmuX86.h"
 #include "core\hle\Intercept.hpp"
 #include "common/Timer.h"
+#include "common/FuncProfile.h"
 
 #include <assert.h>
 #include "devices\Xbox.h" // For g_PCIBus
@@ -1339,9 +1340,6 @@ bool EmuX86_Opcode_PUSH(LPEXCEPTION_POINTERS e, _DInst& info)
 	EmuX86_Mem_Write(e->ContextRecord->Esp, value, sizeof(uint32_t));
 	return true;
 }
-
-#include "common/Timer.h"
-#include "common/FuncProfile.h"
 
 // VBlank-counting RDTSC: when the overlay is active (XMV video playing),
 // RDTSC returns VBlank-counter-based ticks instead of real-time TSC.
