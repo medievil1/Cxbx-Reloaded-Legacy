@@ -1462,6 +1462,17 @@ static void CxbxrKrnlInitHacks()
 					 (d->pcrtc.pending_interrupts & d->pcrtc.enabled_interrupts) ||
 					 (d->ptimer.pending_interrupts & d->ptimer.enabled_interrupts) ||
 					 pvideo_pending);
+				uint32_t nv2a_irq_mask = 0;
+				if (d->pfifo.pending_interrupts & d->pfifo.enabled_interrupts)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PFIFO;
+				if (d->pgraph.pending_interrupts & d->pgraph.enabled_interrupts)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PGRAPH;
+				if (d->pcrtc.pending_interrupts & d->pcrtc.enabled_interrupts)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PCRTC;
+				if (pvideo_pending)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PVIDEO;
+				if (d->ptimer.pending_interrupts & d->ptimer.enabled_interrupts)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PTIMER;
 
 				// PGRAPH INTR_ERROR (D3DDevice_InsertCallback) stalls the GPU
 				// pipeline until the CPU acknowledges it. When pmc_en=0, the
@@ -1477,6 +1488,66 @@ static void CxbxrKrnlInitHacks()
 
 				if (nv2a_irq_pending &&
 				    EmuInterruptList[3] && EmuInterruptList[3]->Connected) {
+					static uint32_t s_last_nv2a_irq_mask = 0xffffffff;
+					static uint32_t s_last_pmc_enable = 0xffffffff;
+					static uint32_t s_last_pfifo_pending = 0xffffffff;
+					static uint32_t s_last_pfifo_enabled = 0xffffffff;
+					static uint32_t s_last_pgraph_pending = 0xffffffff;
+					static uint32_t s_last_pgraph_enabled = 0xffffffff;
+					static uint32_t s_last_pcrtc_pending = 0xffffffff;
+					static uint32_t s_last_pcrtc_enabled = 0xffffffff;
+					static uint32_t s_last_ptimer_pending = 0xffffffff;
+					static uint32_t s_last_ptimer_enabled = 0xffffffff;
+					static uint32_t s_last_pvideo_pending = 0xffffffff;
+					static uint32_t s_last_pvideo_enabled = 0xffffffff;
+					static uint32_t s_repeat_count = 0;
+
+					bool irq_state_changed =
+						s_last_nv2a_irq_mask != nv2a_irq_mask ||
+						s_last_pmc_enable != d->pmc.enabled_interrupts ||
+						s_last_pfifo_pending != d->pfifo.pending_interrupts ||
+						s_last_pfifo_enabled != d->pfifo.enabled_interrupts ||
+						s_last_pgraph_pending != d->pgraph.pending_interrupts ||
+						s_last_pgraph_enabled != d->pgraph.enabled_interrupts ||
+						s_last_pcrtc_pending != d->pcrtc.pending_interrupts ||
+						s_last_pcrtc_enabled != d->pcrtc.enabled_interrupts ||
+						s_last_ptimer_pending != d->ptimer.pending_interrupts ||
+						s_last_ptimer_enabled != d->ptimer.enabled_interrupts ||
+						s_last_pvideo_pending != d->pvideo.pending_interrupts ||
+						s_last_pvideo_enabled != d->pvideo.enabled_interrupts;
+
+					if (irq_state_changed || ((++s_repeat_count & 0x3ff) == 0)) {
+						NV2AIrqDebugLog(
+							"NV2A IRQ3 trigger: mask=0x%08X pmc_en=0x%08X pfifo=%08X/%08X pgraph=%08X/%08X pcrtc=%08X/%08X ptimer=%08X/%08X pvideo=%08X/%08X repeat=%u",
+							nv2a_irq_mask,
+							d->pmc.enabled_interrupts,
+							d->pfifo.pending_interrupts,
+							d->pfifo.enabled_interrupts,
+							d->pgraph.pending_interrupts,
+							d->pgraph.enabled_interrupts,
+							d->pcrtc.pending_interrupts,
+							d->pcrtc.enabled_interrupts,
+							d->ptimer.pending_interrupts,
+							d->ptimer.enabled_interrupts,
+							d->pvideo.pending_interrupts,
+							d->pvideo.enabled_interrupts,
+							s_repeat_count);
+						s_last_nv2a_irq_mask = nv2a_irq_mask;
+						s_last_pmc_enable = d->pmc.enabled_interrupts;
+						s_last_pfifo_pending = d->pfifo.pending_interrupts;
+						s_last_pfifo_enabled = d->pfifo.enabled_interrupts;
+						s_last_pgraph_pending = d->pgraph.pending_interrupts;
+						s_last_pgraph_enabled = d->pgraph.enabled_interrupts;
+						s_last_pcrtc_pending = d->pcrtc.pending_interrupts;
+						s_last_pcrtc_enabled = d->pcrtc.enabled_interrupts;
+						s_last_ptimer_pending = d->ptimer.pending_interrupts;
+						s_last_ptimer_enabled = d->ptimer.enabled_interrupts;
+						s_last_pvideo_pending = d->pvideo.pending_interrupts;
+						s_last_pvideo_enabled = d->pvideo.enabled_interrupts;
+						if (irq_state_changed) {
+							s_repeat_count = 0;
+						}
+					}
 					HalSystemInterrupts[3].Trigger(EmuInterruptList[3]);
 				}
 			}

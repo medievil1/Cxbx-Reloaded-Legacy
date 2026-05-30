@@ -112,10 +112,21 @@ DEVICE_WRITE32(PFIFO)
 
 	switch(addr) {
 		case NV_PFIFO_INTR_0:
+			NV2AIrqDebugLog(
+				"NV2A PFIFO ack: write=0x%08X pending_before=0x%08X pending_after=0x%08X enabled=0x%08X",
+				value,
+				d->pfifo.pending_interrupts,
+				d->pfifo.pending_interrupts & ~value,
+				d->pfifo.enabled_interrupts);
 			d->pfifo.pending_interrupts &= ~value;
 			update_irq(d);
 			break;
 		case NV_PFIFO_INTR_EN_0:
+			NV2AIrqDebugLog(
+				"NV2A PFIFO enable: old=0x%08X new=0x%08X pending=0x%08X",
+				d->pfifo.enabled_interrupts,
+				value,
+				d->pfifo.pending_interrupts);
 			d->pfifo.enabled_interrupts = value;
 			update_irq(d);
 			break;

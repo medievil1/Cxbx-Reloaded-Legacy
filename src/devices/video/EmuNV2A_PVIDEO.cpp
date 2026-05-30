@@ -72,11 +72,22 @@ DEVICE_WRITE32(PVIDEO)
 {
 	switch (addr) {
 	case NV_PVIDEO_INTR:
+		NV2AIrqDebugLog(
+			"NV2A PVIDEO ack: write=0x%08X pending_before=0x%08X pending_after=0x%08X enabled=0x%08X",
+			value,
+			d->pvideo.pending_interrupts,
+			d->pvideo.pending_interrupts & ~value,
+			d->pvideo.enabled_interrupts);
 		d->pvideo.pending_interrupts &= ~value;
 		update_irq(d);
 //		qemu_cond_broadcast(&d->pvideo.interrupt_cond);
 		break;
 	case NV_PVIDEO_INTR_EN:
+		NV2AIrqDebugLog(
+			"NV2A PVIDEO enable: old=0x%08X new=0x%08X pending=0x%08X",
+			d->pvideo.enabled_interrupts,
+			value,
+			d->pvideo.pending_interrupts);
 		d->pvideo.enabled_interrupts = value;
 		update_irq(d);
 		break;
@@ -108,4 +119,3 @@ DEVICE_WRITE32(PVIDEO)
 
 	DEVICE_WRITE32_END(PVIDEO);
 }
-

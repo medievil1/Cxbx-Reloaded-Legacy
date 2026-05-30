@@ -82,10 +82,21 @@ DEVICE_WRITE32(PTIMER)
 	switch (addr) {
 
 	case NV_PTIMER_INTR_0:
+		NV2AIrqDebugLog(
+			"NV2A PTIMER ack: write=0x%08X pending_before=0x%08X pending_after=0x%08X enabled=0x%08X",
+			value,
+			d->ptimer.pending_interrupts,
+			d->ptimer.pending_interrupts & ~value,
+			d->ptimer.enabled_interrupts);
 		d->ptimer.pending_interrupts &= ~value;
 		update_irq(d);
 		break;
 	case NV_PTIMER_INTR_EN_0:
+		NV2AIrqDebugLog(
+			"NV2A PTIMER enable: old=0x%08X new=0x%08X pending=0x%08X",
+			d->ptimer.enabled_interrupts,
+			value,
+			d->ptimer.pending_interrupts);
 		d->ptimer.enabled_interrupts = value;
 		if (d->ptimer.enabled_interrupts & NV_PTIMER_INTR_EN_0_ALARM) {
 			d->ptimer_last = get_now();
