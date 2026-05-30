@@ -482,13 +482,19 @@ XBSYSAPI EXPORTNUM(163) xbox::void_xt FASTCALL xbox::KiUnlockDispatcherDatabase
 {
 	LOG_FUNC_ONE_ARG_TYPE(KIRQL_TYPE, OldIrql);
 
-	// Xbox has a single CPU, so DpcRoutineActive is a system-wide flag.
-	// Skip dispatch if DPCs are already active (prevents re-entrant dispatch).
-	if (!g_DpcRoutineActive) {
-		HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
-	}
-
 	if (OldIrql < DISPATCH_LEVEL) {
+		// Only request DPC dispatch when actually transitioning below
+		// DISPATCH_LEVEL — this is where KfLowerIrql will service the
+		// pending software interrupt.  When OldIrql >= DISPATCH_LEVEL the
+		// request is redundant (KfLowerIrql won't dispatch at that level)
+		// and amplifies dispatch activity for self-re-queuing DPCs.
+		// Also skip if DPCs are already being dispatched on this thread
+		// (g_DpcRoutineActive covers the inline KeInsertQueueDpc path;
+		// DpcRoutineActive covers the background DPC thread path).
+		if (!g_DpcRoutineActive && !KeGetCurrentPrcb()->DpcRoutineActive) {
+			HalRequestSoftwareInterrupt(DISPATCH_LEVEL);
+		}
+
 		// FIXME: this is wrong, it should perform a thread switch and check the kthread of the new selected thread for pending APCs.
 		// We can't perform our own threads switching now, so we will just check the current thread
 
