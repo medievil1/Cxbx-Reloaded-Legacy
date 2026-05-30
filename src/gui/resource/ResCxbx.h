@@ -208,6 +208,7 @@
 #define ID_GUI_STATUS_OVERLAY           1102
 #define ID_GUI_STATUS_EMU_HWND          1103
 #define ID_GUI_STATUS_EMU_HWND_DESTROY  1104
+#define ID_GUI_STATUS_PREPERSIST_FRAME  1105
 #define IDC_XBOX_PORT_0                 1158
 #define IDC_XBOX_PORT_1                 1166
 #define IDC_XBOX_PORT_2                 1174

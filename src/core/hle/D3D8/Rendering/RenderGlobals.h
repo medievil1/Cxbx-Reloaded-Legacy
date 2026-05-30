@@ -128,6 +128,8 @@ extern void CxbxInitWindow();
 
 // Save window state (position, size, faux fullscreen) to shared memory for reboot persistence
 extern void CxbxSaveWindowStateForReboot();
+extern bool CxbxPersistDisplayCaptureCurrentFrame();
+extern void CxbxPersistDisplayOnPresent();
 
 void CxbxUpdateNativeD3DResources();
 

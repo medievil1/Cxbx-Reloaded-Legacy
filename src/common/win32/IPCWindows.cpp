@@ -79,6 +79,10 @@ void ipc_send_gui_update(IPC_UPDATE_GUI command, const unsigned int value)
 			cmdParam = ID_GUI_STATUS_EMU_HWND_DESTROY;
 			break;
 
+		case IPC_UPDATE_GUI::PREPARE_PERSISTED_FRAME:
+			cmdParam = ID_GUI_STATUS_PREPERSIST_FRAME;
+			break;
+
 		default:
 			cmdParam = 0;
 			break;
@@ -123,4 +127,3 @@ void ipc_send_kernel_update(IPC_UPDATE_KERNEL command, const int value, const un
 		SendMessage(reinterpret_cast<HWND>(hwnd), WM_COMMAND, MAKEWPARAM(cmdParam, 0), value);
 	}
 }
-

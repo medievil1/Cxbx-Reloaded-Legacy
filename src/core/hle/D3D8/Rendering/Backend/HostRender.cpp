@@ -25,6 +25,7 @@
 #include "../EmuD3D8_common.h"
 #include <dxgi1_5.h> // IDXGIFactory5, DXGI_FEATURE_PRESENT_ALLOW_TEARING
 #include "Backend_D3D11_PageTracker.h"
+#include "common/win32/PersistDisplay.h"
 #include "devices\video\nv2a.h" // NV2AState
 
 
@@ -438,7 +439,9 @@ void CreateDefaultDevice
    	   	LOG_TEST_CASE("Can't CreateQuery(D3DQUERYTYPE_OCCLUSION) on host!");
    	}
 
-   	DrawInitialBlackScreen();
+	if (!PersistDisplay::HasFrame()) {
+		DrawInitialBlackScreen();
+	}
 
    	// Set up ImGui's render backend
 	ImGui_ImplDX11_Init(g_pD3DDevice, g_pD3DDeviceContext);
@@ -1241,6 +1244,7 @@ HRESULT CxbxPresent()
 
 	HRESULT hRet = g_pSwapChain->Present(0, g_bTearingSupported ? DXGI_PRESENT_ALLOW_TEARING : 0);
 	DEBUG_D3DRESULT(hRet, "g_pSwapChain->Present");
+	CxbxPersistDisplayOnPresent();
 	EmuPresentTick();
 	// Allow the next page tracker flush to use DISCARD (safe at frame boundary
 	// since no draw calls from this frame are still referencing the buffer)
@@ -1253,4 +1257,3 @@ HRESULT CxbxGetBackBuffer(ID3D11Texture2D** ppBackBuffer)
 {
 	return g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(ppBackBuffer));
 }
-

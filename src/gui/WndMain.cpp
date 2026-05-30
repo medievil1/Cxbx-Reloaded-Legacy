@@ -33,6 +33,7 @@
 #include "core\hle\D3D8\XbConvert.h"
 #include "Logging.h"
 #include "WndMain.h"
+#include "common/win32/PersistDisplay.h"
 #include "DlgAbout.h"
 #include "DlgInputConfig.h"
 #include "DlgVideoConfig.h"
@@ -81,6 +82,26 @@ static int gameLogoWidth, gameLogoHeight;
 static int splashLogoWidth, splashLogoHeight;
 
 bool g_SaveOnExit = true;
+
+static void PaintPersistedFrameToWindow(HWND hwnd, HBRUSH backgroundBrush)
+{
+	if (hwnd == NULL || !PersistDisplay::HasFrame()) {
+		return;
+	}
+
+	HDC hDC = GetDC(hwnd);
+	if (hDC == NULL) {
+		return;
+	}
+
+	RECT clientRect;
+	if (GetClientRect(hwnd, &clientRect)) {
+		FillRect(hDC, &clientRect, backgroundBrush);
+		(void)PersistDisplay::Paint(hDC, clientRect);
+	}
+
+	ReleaseDC(hwnd, hDC);
+}
 
 void ClearSymbolCache(const char sStorageLocation[MAX_PATH])
 {
@@ -413,6 +434,15 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 								m_hwndChild = NULL;
 								StopEmulation();
 							}
+							else {
+								m_hwndChild = NULL;
+								InvalidateRect(hwnd, nullptr, FALSE);
+								UpdateWindow(hwnd);
+							}
+							break;
+
+						case ID_GUI_STATUS_PREPERSIST_FRAME:
+							PaintPersistedFrameToWindow(hwnd, m_Brushes[0]);
 							break;
 					}
 				}
@@ -482,7 +512,20 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
             HDC hDC = GetDC(hwnd);
 
+			bool sharedIsEmulating = false;
+			g_EmuShared->GetIsEmulating(&sharedIsEmulating);
+			const bool showPersistedFrame = (m_hwndChild == NULL) && PersistDisplay::HasFrame()
+				&& ((m_iIsEmulating != 0) || sharedIsEmulating);
+
             // draw splash / logo / status
+            if (showPersistedFrame)
+            {
+				RECT clientRect;
+				GetClientRect(hwnd, &clientRect);
+				FillRect(hDC, &clientRect, m_Brushes[0]);
+				(void)PersistDisplay::Paint(hDC, clientRect);
+            }
+            else
             {
                 static const int nLogoBmpW = 100, nLogoBmpH = 17;
 
@@ -2304,10 +2347,12 @@ void WndMain::StartEmulation(HWND hwndParent, DebuggerState LocalDebuggerState /
 
     g_EmuShared->GetIsEmulating(&isEmulating);
 
-    if (isEmulating) {
+	if (isEmulating) {
         PopupError(m_hwnd, "A title is currently emulating, please stop emulation before attempting to start again.");
         return;
     }
+
+	PersistDisplay::Clear();
 
 	// Reset to default
 	g_EmuShared->Reset();
@@ -2440,6 +2485,7 @@ void WndMain::StopEmulation()
 	ResizeWindow(m_hwnd, /*bForGUI=*/true);
 
 	g_EmuShared->SetIsEmulating(false);
+	PersistDisplay::Clear();
 
 	DrawLedBitmap(m_hwnd, true);
 }
