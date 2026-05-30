@@ -85,6 +85,13 @@ typedef struct _PersistedMemory
 {
 	size_t NumOfPtes;
 	VAddr LaunchFrameAddresses[2];
+	VAddr SavedDisplayAddress;
+	uint32_t SavedDisplayPitch;
+	uint32_t SavedDisplayWidth;
+	uint32_t SavedDisplayHeight;
+	uint32_t SavedDisplayFormat;
+	uint32_t SavedDisplaySize;
+	uint32_t SavedDisplayValid;
 #pragma warning(suppress: 4200)
 	uint32_t Data[];
 }PersistedMemory;

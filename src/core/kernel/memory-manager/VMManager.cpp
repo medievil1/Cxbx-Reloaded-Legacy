@@ -319,9 +319,22 @@ void VMManager::RestorePersistentMemory()
 		EmuLog(LOG_LEVEL::INFO, "Restored LaunchDataPage\n");
 	}
 
-	if (persisted_mem->LaunchFrameAddresses[1] != 0 && IS_PHYSICAL_ADDRESS(persisted_mem->LaunchFrameAddresses[1])) {
-		xbox::AvSavedDataAddress = (xbox::PVOID)persisted_mem->LaunchFrameAddresses[1];
-		EmuLog(LOG_LEVEL::INFO, "Restored Framebuffer\n");
+	if (persisted_mem->SavedDisplayValid != 0 &&
+		persisted_mem->SavedDisplayAddress != 0 &&
+		IS_PHYSICAL_ADDRESS(persisted_mem->SavedDisplayAddress)) {
+		CxbxAvDisplayState savedDisplay = {};
+		savedDisplay.FrameBuffer = persisted_mem->SavedDisplayAddress;
+		savedDisplay.Pitch = persisted_mem->SavedDisplayPitch;
+		savedDisplay.Width = persisted_mem->SavedDisplayWidth;
+		savedDisplay.Height = persisted_mem->SavedDisplayHeight;
+		savedDisplay.Format = persisted_mem->SavedDisplayFormat;
+		savedDisplay.SurfaceSize = persisted_mem->SavedDisplaySize;
+		savedDisplay.Valid = 1;
+		CxbxAvRestoreSavedDisplayState(&savedDisplay);
+		EmuLog(LOG_LEVEL::INFO, "Restored persisted display\n");
+	}
+	else {
+		CxbxAvClearSavedDisplayState(false);
 	}
 
 	xbox::MMPTE pte;
@@ -470,9 +483,17 @@ void VMManager::SavePersistentMemory()
 		EmuLog(LOG_LEVEL::INFO, "Persisted LaunchDataPage\n");
 	}
 
-	if (xbox::AvSavedDataAddress != xbox::zeroptr) {
-		persisted_mem->LaunchFrameAddresses[1] = (VAddr)xbox::AvSavedDataAddress;
-		EmuLog(LOG_LEVEL::INFO, "Persisted Framebuffer\n");
+	CxbxAvDisplayState savedDisplay = {};
+	if (CxbxAvGetSavedDisplayState(&savedDisplay)) {
+		persisted_mem->LaunchFrameAddresses[1] = savedDisplay.FrameBuffer;
+		persisted_mem->SavedDisplayAddress = savedDisplay.FrameBuffer;
+		persisted_mem->SavedDisplayPitch = savedDisplay.Pitch;
+		persisted_mem->SavedDisplayWidth = savedDisplay.Width;
+		persisted_mem->SavedDisplayHeight = savedDisplay.Height;
+		persisted_mem->SavedDisplayFormat = savedDisplay.Format;
+		persisted_mem->SavedDisplaySize = savedDisplay.SurfaceSize;
+		persisted_mem->SavedDisplayValid = 1;
+		EmuLog(LOG_LEVEL::INFO, "Persisted display\n");
 	}
 
 	i = 0;

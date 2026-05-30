@@ -418,6 +418,7 @@ class EmuShared : public Mutex
 		RECT         m_SavedWindowRect;
 		bool         m_bSavedFauxFullscreen;
 		bool         m_bSavedWindowStateValid;
+
 };
 
 // ******************************************************************

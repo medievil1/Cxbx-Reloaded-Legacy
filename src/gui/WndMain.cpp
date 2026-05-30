@@ -149,6 +149,7 @@ void WndMain::InitializeSettings()
 #define TIMERID_ACTIVE_EMULATION 0
 #define TIMERID_LED 1
 
+
 void WndMain::ResizeWindow(HWND hwnd, bool bForGUI)
 {
 	RECT desktopRect;
@@ -200,6 +201,7 @@ void WndMain::ResizeWindow(HWND hwnd, bool bForGUI)
 		windowRect.right - windowRect.left,
 		windowRect.bottom - windowRect.top,
 		SWP_NOOWNERZORDER | SWP_NOZORDER);
+
 }
 
 WndMain::WndMain(HINSTANCE x_hInstance) :
@@ -214,6 +216,7 @@ WndMain::WndMain(HINSTANCE x_hInstance) :
 	, m_hDebuggerMonitorThread()
 	, m_prevWindowLoc({ -1, -1 })
 	, m_LogKrnl_status(false)
+	, m_hLastFrameBmp(nullptr)
 {
 	// initialize members
 	{
@@ -360,8 +363,6 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
 				case WM_DESTROY:
 				{
-					// (HWND)HIWORD(wParam) seems to be NULL, so we can't compare to m_hwndChild
-					// We can't check m_hwndChild for nonzero as we may accidentally think reboot did not occur.
 					if (!m_iIsEmulating) {
 						m_hwndChild = NULL;
 						StopEmulation();
@@ -390,6 +391,13 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							Crash_Manager_Data* pCMD = (Crash_Manager_Data*)malloc(sizeof(Crash_Manager_Data));
 							pCMD->pWndMain = this;
 							pCMD->dwChildProcID = lParam; // lParam is process ID.
+							// Increment HERE (GUI main thread, synchronous with the SendMessage that
+							// blocks the new emu process) so the count is already ≥2 by the time
+							// the old emu exits and its CrashMonitorWrapper thread decrements.
+							// Previously the increment was inside CrashMonitorWrapper (background
+							// thread), which could race with the old thread's decrement reaching 0
+							// and calling StopEmulation prematurely during a quick reboot.
+							m_iIsEmulating++;
 							std::thread(CrashMonitorWrapper, pCMD).detach();
 
 							g_EmuShared->SetIsEmulating(true); // NOTE: Putting in here raise to low or medium risk due to debugger will launch itself. (Current workaround)
@@ -402,7 +410,13 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 							break;
 
 						case ID_GUI_STATUS_EMU_HWND:
-							// The emu process sends its render window HWND (WS_POPUP owned window).
+							// The emu process sends its render window HWND (lParam).
+							// New emu render window is ready; drop the captured last frame
+							// (the new window now covers the GUI client area).
+							if (m_hLastFrameBmp) {
+								DeleteObject(m_hLastFrameBmp);
+								m_hLastFrameBmp = nullptr;
+							}
 							m_hwndChild = (HWND)(uintptr_t)lParam;
 							UpdateCaption();
 							RefreshMenus();
@@ -413,6 +427,8 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 								m_hwndChild = NULL;
 								StopEmulation();
 							}
+							// During reboot: the new emu process will create its own render window.
+							// m_hLastFrameBmp was already populated via WM_COPYDATA before this fires.
 							break;
 					}
 				}
@@ -490,16 +506,33 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 
                 bkRect.bottom -= nLogoBmpH + 10;
 
+                if (m_hLastFrameBmp != nullptr) {
+                    // During a reboot gap: show the last rendered frame captured from the
+                    // previous XBE so the user sees a seamless transition instead of the splash.
+                    HDC memDC = CreateCompatibleDC(hDC);
+                    if (memDC) {
+                        HGDIOBJ oldBmp = SelectObject(memDC, m_hLastFrameBmp);
+                        BITMAP bmpInfo = {};
+                        if (GetObject(m_hLastFrameBmp, sizeof(bmpInfo), &bmpInfo) && bmpInfo.bmWidth > 0 && bmpInfo.bmHeight > 0) {
+                            StretchBlt(hDC, 0, 0, m_w, m_h,
+                                       memDC, 0, 0, bmpInfo.bmWidth, bmpInfo.bmHeight, SRCCOPY);
+                        }
+                        SelectObject(memDC, oldBmp);
+                        DeleteDC(memDC);
+                    }
+                } else {
+                // The emu process render window covers the content area during
+                // emulation, so the splash is only visible when not emulating.
                 FillRect(hDC, &bkRect, m_BackgroundColor);
+
+                    BitBlt(hDC, m_w/2 - splashLogoWidth/2, m_h/2 - splashLogoHeight, splashLogoWidth, splashLogoHeight, m_SplashDC, 0, 0, SRCCOPY);
+
+                    BitBlt(hDC, m_w - gameLogoWidth - 3, m_h - nLogoBmpH - 12 - gameLogoHeight, gameLogoWidth, gameLogoHeight, m_GameLogoDC, 0, 0, SRCCOPY);
 
                 bkRect.top = bkRect.bottom;
                 bkRect.bottom += nLogoBmpH + 10;
 
                 FillRect(hDC, &bkRect, m_Brushes[0]);
-
-                BitBlt(hDC, m_w/2 - splashLogoWidth/2, m_h/2 - splashLogoHeight, splashLogoWidth, splashLogoHeight, m_SplashDC, 0, 0, SRCCOPY);
-
-				BitBlt(hDC, m_w - gameLogoWidth - 3, m_h - nLogoBmpH - 12 - gameLogoHeight, gameLogoWidth, gameLogoHeight, m_GameLogoDC, 0, 0, SRCCOPY);
 
                 BitBlt(hDC, m_w-nLogoBmpW-4, m_h-nLogoBmpH-4, nLogoBmpW, nLogoBmpH, m_LogoDC, 0, 0, SRCCOPY);
 
@@ -527,6 +560,7 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
                 SelectObject(hDC, tmpObj);
 
                 DeleteObject(hFont);
+                } // end else (no last frame)
             }
 
             if(hDC != NULL)
@@ -645,6 +679,115 @@ LRESULT CALLBACK WndMain::WndProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lP
 					OpenXbe(DroppedXbeFilename);
 				}
 			}
+		}
+		break;
+
+		case WM_COPYDATA:
+		{
+			const COPYDATASTRUCT* cds = reinterpret_cast<const COPYDATASTRUCT*>(lParam);
+			if (cds && cds->dwData == CXBXR_COPYDATA_LASTFRAME &&
+				cds->cbData >= static_cast<DWORD>(sizeof(CxbxLastFrameHeader)))
+			{
+				const CxbxLastFrameHeader* hdr =
+					reinterpret_cast<const CxbxLastFrameHeader*>(cds->lpData);
+
+				// Validate Pitch/Height before multiplying to avoid DWORD overflow.
+				// A typical Xbox framebuffer is at most 1280 * 1024 * 4 bytes (~5 MB).
+				static constexpr DWORD kMaxFrameBytes = 6 * 1024 * 1024;
+				const bool pitchHeightSafe =
+					hdr->Pitch > 0 && hdr->Height > 0 &&
+					hdr->Pitch <= kMaxFrameBytes / hdr->Height;
+				const DWORD pixelBytes = pitchHeightSafe ? (hdr->Pitch * hdr->Height) : 0;
+
+				if (pixelBytes > 0 && cds->cbData >= sizeof(CxbxLastFrameHeader) + pixelBytes) {
+					// Build BITMAPINFO for the Xbox pixel format so StretchDIBits can
+					// decode the raw bytes into a compatible device bitmap.
+					struct {
+						BITMAPINFOHEADER bmiH;
+						DWORD            masks[3]; // only used for BI_BITFIELDS (R5G6B5)
+					} bmi = {};
+
+					// Named bit-mask constants for R5G6B5
+					static constexpr DWORD kR5G6B5_RedMask   = 0xF800;
+					static constexpr DWORD kR5G6B5_GreenMask = 0x07E0;
+					static constexpr DWORD kR5G6B5_BlueMask  = 0x001F;
+
+					WORD  bitCount    = 32;
+					DWORD compression = BI_RGB;
+
+					switch (static_cast<xbox::X_D3DFORMAT>(hdr->Format)) {
+					case xbox::X_D3DFMT_LIN_A8R8G8B8:
+					case xbox::X_D3DFMT_LIN_X8R8G8B8:
+						bitCount = 32; compression = BI_RGB;
+						break;
+					case xbox::X_D3DFMT_LIN_R5G6B5:
+						bitCount = 16; compression = BI_BITFIELDS;
+						bmi.masks[0] = kR5G6B5_RedMask;
+						bmi.masks[1] = kR5G6B5_GreenMask;
+						bmi.masks[2] = kR5G6B5_BlueMask;
+						break;
+					case xbox::X_D3DFMT_LIN_A1R5G5B5:
+					case xbox::X_D3DFMT_LIN_X1R5G5B5:
+						bitCount = 16; compression = BI_RGB; // GDI 555 default
+						break;
+					default:
+						bitCount = 0; // unsupported format; skip
+						EmuLog(LOG_LEVEL::WARNING, "CxbxLastFrame: unsupported Xbox display format 0x%X; "
+						       "splash may briefly appear on reboot.", hdr->Format);
+						break;
+					}
+
+					if (bitCount != 0) {
+						bmi.bmiH.biSize        = sizeof(BITMAPINFOHEADER);
+						bmi.bmiH.biWidth       = static_cast<LONG>(hdr->Width);
+						bmi.bmiH.biHeight      = -static_cast<LONG>(hdr->Height); // top-down
+						bmi.bmiH.biPlanes      = 1;
+						bmi.bmiH.biBitCount    = bitCount;
+						bmi.bmiH.biCompression = compression;
+						bmi.bmiH.biSizeImage   = pixelBytes;
+
+						const BYTE* pixels = reinterpret_cast<const BYTE*>(cds->lpData)
+						                     + sizeof(CxbxLastFrameHeader);
+
+						HDC hDC = GetDC(hwnd);
+						if (hDC) {
+							HDC memDC = CreateCompatibleDC(hDC);
+							if (memDC) {
+								HBITMAP bmp = CreateCompatibleBitmap(hDC,
+								                 static_cast<int>(hdr->Width),
+								                 static_cast<int>(hdr->Height));
+								if (bmp) {
+									HGDIOBJ old = SelectObject(memDC, bmp);
+									StretchDIBits(memDC,
+									    0, 0,
+									    static_cast<int>(hdr->Width),
+									    static_cast<int>(hdr->Height),
+									    0, 0,
+									    static_cast<int>(hdr->Width),
+									    static_cast<int>(hdr->Height),
+									    pixels,
+									    reinterpret_cast<const BITMAPINFO*>(&bmi),
+									    DIB_RGB_COLORS, SRCCOPY);
+									SelectObject(memDC, old);
+
+									if (m_hLastFrameBmp) { DeleteObject(m_hLastFrameBmp); }
+									m_hLastFrameBmp = bmp;
+
+									// Immediately update the GUI window's surface so DWM
+									// reveals the last game frame (not the splash) the
+									// instant the emu render popup is destroyed.
+									InvalidateRect(hwnd, NULL, FALSE);
+									UpdateWindow(hwnd);
+								}
+								DeleteDC(memDC);
+							}
+							ReleaseDC(hwnd, hDC);
+						}
+					}
+				}
+				return TRUE;
+			}
+			return DefWindowProc(hwnd, uMsg, wParam, lParam);
 		}
 		break;
 
@@ -2441,6 +2584,11 @@ void WndMain::StopEmulation()
 
 	g_EmuShared->SetIsEmulating(false);
 
+	if (m_hLastFrameBmp) {
+		DeleteObject(m_hLastFrameBmp);
+		m_hLastFrameBmp = nullptr;
+	}
+
 	DrawLedBitmap(m_hwnd, true);
 }
 
@@ -2448,15 +2596,27 @@ void WndMain::StopEmulation()
 DWORD WndMain::CrashMonitorWrapper(LPVOID lpParam)
 {
 	Crash_Manager_Data* pCMD = (Crash_Manager_Data*)lpParam;
-	static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating++; // Multi-xbe boots usage check
-	static_cast<WndMain*>(pCMD->pWndMain)->CrashMonitor(pCMD->dwChildProcID);
+	// NOTE: m_iIsEmulating was already incremented on the GUI thread inside the
+	// ID_GUI_STATUS_KRNL_IS_READY handler (synchronous with the new emu's SendMessage)
+	// to avoid a race where this thread might not start before the previous process'
+	// CrashMonitorWrapper decrements the count to zero and calls StopEmulation.
+	WndMain* pWnd = static_cast<WndMain*>(pCMD->pWndMain);
+
+	pWnd->CrashMonitor(pCMD->dwChildProcID);
 	// Check if is not zero and avoid accidental decrement.
-	if (static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating) {
-		static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating--; // Multi-xbe boots usage check
+	if (pWnd->m_iIsEmulating) {
+		pWnd->m_iIsEmulating--; // Multi-xbe boots usage check
 	}
 
-	if (!static_cast<WndMain*>(pCMD->pWndMain)->m_iIsEmulating) {
-		static_cast<WndMain*>(pCMD->pWndMain)->StopEmulation();
+	if (!pWnd->m_iIsEmulating) {
+		pWnd->StopEmulation();
+	} else {
+		// Reboot path: the old emu process has now exited so its render popup is gone.
+		// Force a repaint on the GUI window so the last captured frame (m_hLastFrameBmp)
+		// is displayed instead of the splash while the new emu process starts up.
+		// InvalidateRect is safe to call from any thread; WM_PAINT fires on the GUI
+		// main thread the next time it drains its message queue.
+		InvalidateRect(pWnd->m_hwnd, NULL, FALSE);
 	}
 
 	free(lpParam);

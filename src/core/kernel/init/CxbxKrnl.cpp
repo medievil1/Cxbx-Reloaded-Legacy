@@ -1228,6 +1228,7 @@ static void CxbxrKrnlInitHacks()
 	// Read Xbox video mode from the SMC, store it in HalBootSMCVideoMode
 	xbox::HalReadSMBusValue(SMBUS_ADDRESS_SYSTEM_MICRO_CONTROLLER, SMC_COMMAND_AV_PACK, FALSE, (xbox::PULONG)&xbox::HalBootSMCVideoMode);
 
+	// In GUI embedded mode, raw input goes to the hidden IPC window; standalone uses the render window.
 	g_InputDeviceManager.Initialize(false, g_hEmuWindow);
 
 	// Now the hardware devices exist, couple the EEPROM buffer to it's device

@@ -166,11 +166,6 @@ XBSYSAPI EXPORTNUM(161) void_xt FASTCALL KfLowerIrql
 // ******************************************************************
 XBSYSAPI EXPORTNUM(162) ulong_ptr_xt KiBugCheckData[5];
 
-void KiLockDispatcherDatabase 
-(
-	OUT KIRQL* OldIrql
-);
-
 // ******************************************************************
 // * 0x00A3 - KiUnlockDispatcherDatabase()
 // ******************************************************************
@@ -573,3 +568,4 @@ XBSYSAPI EXPORTNUM(373) ntstatus_xt NTAPI IrtSweep // PROFILING
 }
 
 #endif
+

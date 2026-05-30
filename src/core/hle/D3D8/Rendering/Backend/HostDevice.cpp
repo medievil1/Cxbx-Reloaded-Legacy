@@ -23,6 +23,9 @@
 // *
 // ******************************************************************
 #include "../EmuD3D8_common.h"
+#include "core\kernel\exports\EmuKrnl.h"
+#include "common\IPCHybrid.hpp"
+#include <vector>
 
 // Variables only used in HostDevice.cpp
 static HBRUSH g_hBgBrush = NULL; // Background Brush
@@ -35,10 +38,61 @@ void CxbxSaveWindowStateForReboot()
 	if (g_hEmuWindow == NULL)
 		return;
 
+	if (CxbxKrnl_hEmuParent != NULL) {
+		// GUI mode: window position is managed by the GUI process; save faux fullscreen state only.
+		RECT dummy = {};
+		g_EmuShared->SetSavedWindowState(&dummy, g_bIsFauxFullscreen);
+		return;
+	}
+
 	RECT rect;
 	if (GetWindowRect(g_hEmuWindow, &rect)) {
 		g_EmuShared->SetSavedWindowState(&rect, g_bIsFauxFullscreen);
 	}
+}
+
+void CxbxSendLastFrameToParent()
+{
+	// Only applicable in GUI-embedded mode; standalone mode has no parent to paint.
+	if (CxbxKrnl_hEmuParent == NULL)
+		return;
+
+	CxbxAvDisplayState savedDisplay = {};
+	if (!CxbxAvGetSavedDisplayState(&savedDisplay))
+		return;
+
+	if (savedDisplay.SurfaceSize == 0 ||
+		!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer) ||
+		!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer + savedDisplay.SurfaceSize - 1))
+		return;
+
+	// Pack the header and raw pixel bytes into one contiguous buffer and send
+	// via WM_COPYDATA to the GUI parent so it can freeze on this frame instead
+	// of flashing the Cxbx splash during the reboot process-cycle gap.
+	const SIZE_T totalSize = sizeof(CxbxLastFrameHeader) + savedDisplay.SurfaceSize;
+	std::vector<BYTE> buf(totalSize);
+
+	auto* hdr    = reinterpret_cast<CxbxLastFrameHeader*>(buf.data());
+	hdr->Width   = savedDisplay.Width;
+	hdr->Height  = savedDisplay.Height;
+	hdr->Pitch   = savedDisplay.Pitch;
+	hdr->Format  = savedDisplay.Format;
+
+	memcpy(buf.data() + sizeof(CxbxLastFrameHeader),
+	       reinterpret_cast<const void*>(savedDisplay.FrameBuffer),
+	       savedDisplay.SurfaceSize);
+
+	COPYDATASTRUCT cds = {};
+	cds.dwData = CXBXR_COPYDATA_LASTFRAME;
+	cds.cbData = static_cast<DWORD>(totalSize);
+	cds.lpData = buf.data();
+
+	// SendMessage is synchronous: the GUI process stores the frame as a bitmap
+	// before this call returns, ensuring m_hLastFrameBmp is ready before WM_PAINT
+	// can fire after the emu render window disappears.
+	SendMessage(CxbxKrnl_hEmuParent, WM_COPYDATA,
+	            reinterpret_cast<WPARAM>(g_hEmuWindow),
+	            reinterpret_cast<LPARAM>(&cds));
 }
 
 // Forward declarations (defined later in this file)
@@ -270,20 +324,24 @@ void ToggleFauxFullscreen(HWND hWnd)
    	if (g_bIsFauxFullscreen) {
    	   	GetWindowRect(hWnd, &lRect);
    	   	gwl_style = GetWindowLong(hWnd, GWL_STYLE);
+   	   	// Force WS_POPUP for fullscreen; in GUI embedded mode the window is already WS_POPUP
+   	   	// so this is a no-op, but it ensures correct behaviour in standalone mode too.
    	   	SetWindowLong(hWnd, GWL_STYLE, WS_POPUP);
-   	   	if (CxbxKrnl_hEmuParent) {
-   	   	   	// Window is already WS_POPUP (owned), just go topmost and maximize.
-   	   	   	// No SetParent(NULL) needed since we're not a child window.
-   	   	}
    	   	SetWindowPos(hWnd, HWND_TOPMOST, lRect.left, lRect.top, 0, 0, SWP_NOSIZE);
    	   	ShowWindow(hWnd, SW_MAXIMIZE);
    	}
    	else {
    	   	SetWindowLong(hWnd, GWL_STYLE, gwl_style);
    	   	if(CxbxKrnl_hEmuParent) {
-   	   	   	// Restore popup position over the GUI's client area.
-   	   	   	SetWindowPos(hWnd, HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
-   	   	   	RepositionToParentClientArea();
+   	   	   	// Restore to cover the GUI client area again.
+   	   	   	RECT clientRect;
+   	   	   	GetClientRect(CxbxKrnl_hEmuParent, &clientRect);
+   	   	   	MapWindowPoints(CxbxKrnl_hEmuParent, NULL, (LPPOINT)&clientRect, 2);
+   	   	   	SetWindowPos(hWnd, HWND_NOTOPMOST,
+   	   	   	   	clientRect.left, clientRect.top,
+   	   	   	   	clientRect.right - clientRect.left,
+   	   	   	   	clientRect.bottom - clientRect.top,
+   	   	   	   	SWP_NOACTIVATE);
    	   	   	ShowWindow(hWnd, SW_SHOW);
    	   	}
    	   	else {
@@ -299,27 +357,32 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 // rendering window message procedure
 LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
-	const LRESULT imguiResult = ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
-	if (imguiResult != 0) return imguiResult;
+	if (hWnd == g_hEmuWindow) {
+		const LRESULT imguiResult = ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam);
+		if (imguiResult != 0) return imguiResult;
+	}
 
    	switch(msg)
    	{
    	   	case WM_DESTROY:
    	   	{
-   	   	   	// Notify GUI that our window is gone (owned popup doesn't trigger
-   	   	   	// automatic WM_PARENTNOTIFY/WM_DESTROY like WS_CHILD did).
+   	   	   	// Notify GUI that our render window is gone.
    	   	   	if (CxbxKrnl_hEmuParent) {
    	   	   	   	ipc_send_gui_update(IPC_UPDATE_GUI::WINDOW_DESTROYED, 0);
    	   	   	}
 
-   	   	   	// Unhook parent position tracking
+   	   	   	// Unhook parent position tracking if active.
    	   	   	if (g_parentEventHook) {
    	   	   	   	UnhookWinEvent(g_parentEventHook);
    	   	   	   	g_parentEventHook = NULL;
    	   	   	}
 
    	   	   	CxbxReleaseCursor();
-   	   	   	DeleteObject(g_hBgBrush);
+   	   	   	// g_hBgBrush may be NULL if the window class used no background brush.
+   	   	   	if (g_hBgBrush) {
+   	   	   	   	DeleteObject(g_hBgBrush);
+   	   	   	   	g_hBgBrush = NULL;
+   	   	   	}
    	   	   	PostQuitMessage(0);
    	   	   	return S_OK; // = 0
    	   	}
@@ -396,7 +459,7 @@ LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
    	   	{
    	   	   	if(wParam == VK_RETURN)
    	   	   	{
-   	   	   	   	ToggleFauxFullscreen(hWnd);
+   	   	   	   	ToggleFauxFullscreen(g_hEmuWindow);
    	   	   	}
    	   	   	else if(wParam == VK_F4)
    	   	   	{
@@ -406,7 +469,7 @@ LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
    	   	   	// Source: https://docs.microsoft.com/en-us/windows/desktop/inputdev/wm-syskeydown
    	   	   	else if(wParam == VK_F10)
    	   	   	{
-   	   	   	   	ToggleFauxFullscreen(hWnd);
+   	   	   	   	ToggleFauxFullscreen(g_hEmuWindow);
    	   	   	}
    	   	   	else
    	   	   	{
@@ -426,7 +489,7 @@ LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
    	   	   	   	}
    	   	   	   	else if(g_bIsFauxFullscreen)
    	   	   	   	{
-   	   	   	   	   	ToggleFauxFullscreen(hWnd);
+   	   	   	   	   	ToggleFauxFullscreen(g_hEmuWindow);
    	   	   	   	}
    	   	   	}
    	   	   	else if (wParam == VK_F1)
@@ -443,7 +506,7 @@ LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
    	   	   	   	g_EmuShared->SetClipCursorFlag(g_bClipCursor);
 
    	   	   	   	if (g_bClipCursor) {
-   	   	   	   	   	CxbxClipCursor(hWnd);
+   	   	   	   	   	CxbxClipCursor(g_hEmuWindow);
    	   	   	   	}
    	   	   	   	else {
    	   	   	   	   	CxbxReleaseCursor();
@@ -500,7 +563,7 @@ LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
    	   	   	}
 
    	   	   	if (g_bClipCursor) {
-   	   	   	   	CxbxClipCursor(hWnd);
+   	   	   	   	CxbxClipCursor(g_hEmuWindow);
    	   	   	}
    	   	}
    	   	break;
@@ -508,7 +571,7 @@ LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
    	   	case WM_MOVE:
    	   	{
    	   	   	if (g_bClipCursor) {
-   	   	   	   	CxbxClipCursor(hWnd);
+   	   	   	   	CxbxClipCursor(g_hEmuWindow);
    	   	   	}
    	   	}
    	   	break;
@@ -525,7 +588,7 @@ LRESULT WINAPI EmuMsgProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
    	   	case WM_MOUSEMOVE:
    	   	{
    	   	   	if (g_bClipCursor) {
-   	   	   	   	CxbxClipCursor(hWnd);
+   	   	   	   	CxbxClipCursor(g_hEmuWindow);
    	   	   	}
 
    	   	   	if (!g_bIsTrackingMoLeave) {

@@ -586,6 +586,10 @@ XBSYSAPI EXPORTNUM(49) xbox::void_xt DECLSPEC_NORETURN NTAPI xbox::HalReturnToFi
 				// Save window state so the new process can restore position/fullscreen
 				CxbxSaveWindowStateForReboot();
 
+				CxbxAvPersistCurrentDisplayState();
+				// Send the last rendered frame to the GUI parent before this process
+				// shuts down, so the GUI shows the previous frame instead of the splash.
+				CxbxSendLastFrameToParent();
 				g_VMManager.SavePersistentMemory();
 
 				// Some titles (Xbox Dashboard and retail/demo discs) use ";" as a current directory path seperator

@@ -94,6 +94,7 @@ constexpr UINT WM_CXBXR_RUN_ON_MESSAGE_THREAD = WM_USER+0;
 struct FixedFunctionVertexShaderState;
 extern FixedFunctionVertexShaderState ffShaderState;
 extern HWND                          g_hEmuWindow;
+
 extern bool                          g_bClipCursor;
 extern bool                          g_bSupportsFormatSurface[xbox::X_D3DFMT_LAST + 1];
 extern bool                          g_bSupportsFormatSurfaceRenderTarget[xbox::X_D3DFMT_LAST + 1];
@@ -128,6 +129,10 @@ extern void CxbxInitWindow();
 
 // Save window state (position, size, faux fullscreen) to shared memory for reboot persistence
 extern void CxbxSaveWindowStateForReboot();
+
+// Send the last rendered Xbox framebuffer to the GUI parent via WM_COPYDATA so the
+// GUI can display it instead of the Cxbx splash during the reboot process-cycle gap.
+extern void CxbxSendLastFrameToParent();
 
 void CxbxUpdateNativeD3DResources();
 

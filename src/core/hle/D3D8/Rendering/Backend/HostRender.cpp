@@ -25,6 +25,7 @@
 #include "../EmuD3D8_common.h"
 #include <dxgi1_5.h> // IDXGIFactory5, DXGI_FEATURE_PRESENT_ALLOW_TEARING
 #include "Backend_D3D11_PageTracker.h"
+#include "core\kernel\exports\EmuKrnl.h"
 #include "devices\video\nv2a.h" // NV2AState
 
 
@@ -32,14 +33,79 @@
 static xbox::dword_xt                  *g_Xbox_D3DDevice; // TODO: This should be a D3DDevice structure
 */
 
-static void DrawInitialBlackScreen
-(
-)
+static DXGI_FORMAT GetSavedDisplayDXGIFormat(xbox::X_D3DFORMAT format)
 {
-   	// initially, show a black screen
-   	// Only clear depth buffer and stencil if present
-   	//
-   	// Avoids following DirectX Debug Runtime error report
+	switch (format) {
+	case xbox::X_D3DFMT_LIN_A1R5G5B5:
+	case xbox::X_D3DFMT_LIN_X1R5G5B5:
+		return DXGI_FORMAT_B5G5R5A1_UNORM;
+	case xbox::X_D3DFMT_LIN_R5G6B5:
+		return DXGI_FORMAT_B5G6R5_UNORM;
+	case xbox::X_D3DFMT_LIN_A8R8G8B8:
+	case xbox::X_D3DFMT_LIN_X8R8G8B8:
+		return DXGI_FORMAT_B8G8R8A8_UNORM;
+	case xbox::X_D3DFMT_LIN_L8:
+		return DXGI_FORMAT_R8_UNORM;
+	default:
+		return DXGI_FORMAT_UNKNOWN;
+	}
+}
+
+static bool DrawPersistedDisplay()
+{
+	CxbxAvDisplayState savedDisplay = {};
+	if (!CxbxAvGetSavedDisplayState(&savedDisplay)) {
+		return false;
+	}
+
+	DXGI_FORMAT format = GetSavedDisplayDXGIFormat(static_cast<xbox::X_D3DFORMAT>(savedDisplay.Format));
+	if (format == DXGI_FORMAT_UNKNOWN || savedDisplay.Pitch == 0 || savedDisplay.Width == 0 || savedDisplay.Height == 0) {
+		return false;
+	}
+	if (!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer) ||
+		!g_VMManager.IsValidVirtualAddress(savedDisplay.FrameBuffer + savedDisplay.SurfaceSize - 1)) {
+		return false;
+	}
+
+	D3D11_TEXTURE2D_DESC desc = {};
+	desc.Width = savedDisplay.Width;
+	desc.Height = savedDisplay.Height;
+	desc.MipLevels = 1;
+	desc.ArraySize = 1;
+	desc.Format = format;
+	desc.SampleDesc.Count = 1;
+	desc.Usage = D3D11_USAGE_DEFAULT;
+	desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+
+	ComPtr<ID3D11Texture2D> savedFrame;
+	HRESULT hr = g_pD3DDevice->CreateTexture2D(&desc, nullptr, savedFrame.GetAddressOf());
+	if (FAILED(hr)) {
+		return false;
+	}
+
+	const void* frameData = reinterpret_cast<const void*>(savedDisplay.FrameBuffer);
+	g_pD3DDeviceContext->UpdateSubresource(savedFrame.Get(), 0, nullptr, frameData, savedDisplay.Pitch, 0);
+
+	RECT dest = {};
+	dest.right = (LONG)g_HostBackBufferDesc.Width;
+	dest.bottom = (LONG)g_HostBackBufferDesc.Height;
+
+	CxbxBltSurface(savedFrame.Get(), nullptr, g_pD3DBackBufferSurface, &dest, D3DTEXF_LINEAR);
+	CxbxBeginScene();
+	CxbxPresent();
+	return true;
+}
+
+static void DrawInitialBlackScreen()
+{
+	if (DrawPersistedDisplay()) {
+		return;
+	}
+
+	// initially, show a black screen
+	// Only clear depth buffer and stencil if present
+	//
+	// Avoids following DirectX Debug Runtime error report
    	//    [424] Direct3D8: (ERROR) :Invalid flag D3DCLEAR_ZBUFFER: no zbuffer is associated with device. Clear failed. 
    	//
 
@@ -1253,4 +1319,3 @@ HRESULT CxbxGetBackBuffer(ID3D11Texture2D** ppBackBuffer)
 {
 	return g_pSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D), reinterpret_cast<void**>(ppBackBuffer));
 }
-

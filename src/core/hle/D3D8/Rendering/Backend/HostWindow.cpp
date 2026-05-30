@@ -87,7 +87,10 @@ void CxbxInitWindow()
 		CloseHandle(hRenderWindowThread);
    	}
 
-	SetFocus(g_hEmuWindow);
+	// In GUI embedded mode, SetFocus across process boundaries is not permitted.
+	if (CxbxKrnl_hEmuParent == NULL) {
+		SetFocus(g_hEmuWindow);
+	}
 	g_renderbase = std::unique_ptr<RenderBase>(new RenderBase());
 	g_renderbase->Initialize();
 

@@ -179,6 +179,12 @@ class WndMain : public Wnd
         HBRUSH      m_BackgroundColor;
 
         // ******************************************************************
+        // * Last-frame bitmap captured during a reboot (shown in WM_PAINT
+        // * until the new emu window takes over, preventing splash flash).
+        // ******************************************************************
+        HBITMAP     m_hLastFrameBmp;
+
+        // ******************************************************************
         // * Xbe objects
         // ******************************************************************
         Xbe        *m_Xbe;

@@ -32,7 +32,8 @@ FixedFunctionVertexShaderState ffShaderState = {}; // TODO find a home for this 
 using namespace std::literals::chrono_literals;
 
 // Global(s)
-HWND                         g_hEmuWindow   = NULL; // rendering window
+HWND                         g_hEmuWindow   = NULL; // rendering window (emu-process-owned WS_POPUP, owned by GUI parent in embedded mode)
+
 bool                         g_bClipCursor  = false; // indicates that the mouse cursor should be confined inside the rendering window
 ID3D11Device                *g_pD3DDevice   = nullptr; // Direct3D Device
 

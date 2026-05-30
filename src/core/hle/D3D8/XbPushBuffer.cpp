@@ -32,6 +32,7 @@
 #include <cstdio>
 #include "common/FuncProfile.h"
 
+#include "core\kernel\exports\EmuKrnl.h"
 #include "core\kernel\support\Emu.h"
 #include "core\hle\D3D8\XbD3D8Types.h" // For X_D3DFORMAT
 #include "core\hle\D3D8\ResourceTracker.h"
@@ -649,6 +650,7 @@ static void D3D11_flip_stall(NV2AState *d)
 
 	// Profiler: tick frame and dump timing breakdown once per second
 	CxbxProfilerFrameTick();
+	CxbxAvClearSavedDisplayState();
 	CxbxPageTrackerUnlockD3D11Context();
 }
 
