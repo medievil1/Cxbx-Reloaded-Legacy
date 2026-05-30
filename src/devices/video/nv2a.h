@@ -97,6 +97,8 @@ void pgraph_trace_begin(const char *tag);
 void pgraph_trace_end();
 void pgraph_trace_close();
 
+void NV2AIrqDebugLog(const char* fmt, ...);
+
 // Submit a block of NV2A push buffer commands through the real PFIFO
 // pusher->puller->PGRAPH pipeline.  pPushData must point into contiguous
 // memory (>= 0x80000000).  Blocks until all commands have been processed.

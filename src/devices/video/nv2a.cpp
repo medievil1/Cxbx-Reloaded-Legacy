@@ -43,9 +43,14 @@
 #endif
 
 #include <string> // For std::string
+#include <cstdarg>
+#include <cstdio>
+#include <filesystem>
+#include <mutex>
 #include <distorm.h> // For uint32_t
 #include <process.h> // For __beginthreadex(), etc.
 
+#include "common/FilePaths.hpp"
 #include "core\kernel\init\CxbxKrnl.h" // For XBOX_MEMORY_SIZE, DWORD, etc
 #include "common/FuncProfile.h"
 #include "core\kernel\support\Emu.h"
@@ -65,6 +70,31 @@
 #include <cassert>
 
 // glib types
+
+void NV2AIrqDebugLog(const char* fmt, ...)
+{
+	static std::mutex s_nv2a_irq_log_mutex;
+	static FILE* s_nv2a_irq_log = nullptr;
+
+	std::lock_guard<std::mutex> lock(s_nv2a_irq_log_mutex);
+
+	if (!s_nv2a_irq_log) {
+		std::filesystem::path exe_path(szFilePath_CxbxReloaded_Exe);
+		std::filesystem::path log_path = exe_path.parent_path() / "nv2a_irq_debug.log";
+		s_nv2a_irq_log = fopen(log_path.string().c_str(), "a");
+		if (!s_nv2a_irq_log) {
+			return;
+		}
+	}
+
+	fprintf(s_nv2a_irq_log, "[%08lX] ", GetCurrentThreadId());
+	va_list args;
+	va_start(args, fmt);
+	vfprintf(s_nv2a_irq_log, fmt, args);
+	va_end(args);
+	fputc('\n', s_nv2a_irq_log);
+	fflush(s_nv2a_irq_log);
+}
 typedef char gchar;
 typedef int gint;
 typedef unsigned int guint;

@@ -162,10 +162,21 @@ DEVICE_WRITE32(PCRTC)
 	switch (addr) {
 
 	case NV_PCRTC_INTR_0:
+		NV2AIrqDebugLog(
+			"NV2A PCRTC ack: write=0x%08X pending_before=0x%08X pending_after=0x%08X enabled=0x%08X",
+			value,
+			d->pcrtc.pending_interrupts,
+			d->pcrtc.pending_interrupts & ~value,
+			d->pcrtc.enabled_interrupts);
 		d->pcrtc.pending_interrupts &= ~value;
 		update_irq(d);
 		break;
 	case NV_PCRTC_INTR_EN_0:
+		NV2AIrqDebugLog(
+			"NV2A PCRTC enable: old=0x%08X new=0x%08X pending=0x%08X",
+			d->pcrtc.enabled_interrupts,
+			value,
+			d->pcrtc.pending_interrupts);
 		d->pcrtc.enabled_interrupts = value;
 		// Safety net: prevent VBlank from being disabled once the game's ISR is
 		// connected. The D3D runtime may briefly clear this during init, but

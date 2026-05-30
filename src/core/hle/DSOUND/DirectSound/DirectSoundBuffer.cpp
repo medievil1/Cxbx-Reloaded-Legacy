@@ -62,6 +62,16 @@ void DirectSoundDoWork_Buffer(xbox::LARGE_INTEGER &time)
     vector_ds_buffer::iterator ppDSBuffer = g_pDSoundBufferCache.begin();
     for (; ppDSBuffer != g_pDSoundBufferCache.end(); ppDSBuffer++) {
         xbox::EmuDirectSoundBuffer* pThis = ((*ppDSBuffer)->emuDSBuffer);
+
+        // Update memory-mapped play cursor for games that busy-poll the hardware position.
+        // This must happen for all buffers regardless of lock state.
+        if (pThis->EmuDirectSoundBuffer8 != nullptr) {
+            DWORD dwPlayCursor = 0;
+            if (SUCCEEDED(pThis->EmuDirectSoundBuffer8->GetCurrentPosition(&dwPlayCursor, nullptr))) {
+                pThis->Xb_playCursor = DSoundBufferGetXboxBufferSize(pThis->EmuFlags, dwPlayCursor);
+            }
+        }
+
         if (pThis->Host_lock.pLockPtr1 == nullptr || pThis->EmuBufferToggle != xbox::X_DSB_TOGGLE_DEFAULT) {
             continue;
         }
@@ -252,6 +262,13 @@ xbox::hresult_xt WINAPI xbox::EMUPATCH(DirectSoundCreateBuffer)
             HybridDirectSoundBuffer_SetVolume(pEmuBuffer->EmuDirectSoundBuffer8, 0L, pEmuBuffer->EmuFlags,
                 pEmuBuffer->Xb_VolumeMixbin, pHybridBuffer->p_CDSVoice);
 
+            // Set up memory-mapped play cursor fields in CMcpxVoiceClient for games that
+            // busy-poll the hardware play position instead of calling GetCurrentPosition.
+            // On real Xbox, the APU writes the current buffer offset (CBO) to a hardware register.
+            xbox::CMcpxVoiceClient* pVoiceClient = pHybridBuffer->p_CMcpxVoiceClient;
+            pVoiceClient->settings.dwBufferAllocSize = pEmuBuffer->X_BufferCacheSize;
+            pVoiceClient->settings.pPlayCursor = reinterpret_cast<uint32_t>(&pEmuBuffer->Xb_playCursor);
+
             g_pDSoundBufferCache.push_back(pHybridBuffer);
         }
     }
@@ -303,6 +320,11 @@ xbox::hresult_xt WINAPI xbox::EMUPATCH(IDirectSoundBuffer_GetCurrentPosition)
 
     EmuDirectSoundBuffer* pThis = pHybridThis->emuDSBuffer;
     xbox::hresult_xt hRet = HybridDirectSoundBuffer_GetCurrentPosition(pThis->EmuDirectSoundBuffer8, (::PDWORD)pdwCurrentPlayCursor, (::PDWORD)pdwCurrentWriteCursor, pThis->EmuFlags);
+
+    // Also update the memory-mapped play cursor for busy-polling games
+    if (pdwCurrentPlayCursor != xbox::zeroptr) {
+        pThis->Xb_playCursor = *pdwCurrentPlayCursor;
+    }
 
     LOG_FUNC_BEGIN_ARG_RESULT
         LOG_FUNC_ARG_RESULT(pdwCurrentPlayCursor)

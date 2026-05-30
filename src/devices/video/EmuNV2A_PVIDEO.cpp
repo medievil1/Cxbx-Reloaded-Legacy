@@ -72,11 +72,22 @@ DEVICE_WRITE32(PVIDEO)
 {
 	switch (addr) {
 	case NV_PVIDEO_INTR:
+		NV2AIrqDebugLog(
+			"NV2A PVIDEO ack: write=0x%08X pending_before=0x%08X pending_after=0x%08X enabled=0x%08X",
+			value,
+			d->pvideo.pending_interrupts,
+			d->pvideo.pending_interrupts & ~value,
+			d->pvideo.enabled_interrupts);
 		d->pvideo.pending_interrupts &= ~value;
 		update_irq(d);
 //		qemu_cond_broadcast(&d->pvideo.interrupt_cond);
 		break;
 	case NV_PVIDEO_INTR_EN:
+		NV2AIrqDebugLog(
+			"NV2A PVIDEO enable: old=0x%08X new=0x%08X pending=0x%08X",
+			d->pvideo.enabled_interrupts,
+			value,
+			d->pvideo.pending_interrupts);
 		d->pvideo.enabled_interrupts = value;
 		update_irq(d);
 		break;
@@ -84,13 +95,12 @@ DEVICE_WRITE32(PVIDEO)
 		d->pvideo.regs[RI(NV_PVIDEO_BUFFER)] = value;
 		d->enable_overlay = (value != 0);
 		pvideo_vga_invalidate(d);
-		// Trigger overlay compositing inline on the game thread.
-		// This matches the master (D3D9 HLE) branch where UpdateOverlay
-		// is a single synchronous call.  Bypasses the puller entirely
-		// to avoid the pfifo_lock/pgraph_lock deadlock.
-		if (d->enable_overlay && g_pgraph_backend.flip_stall) {
-			extern void pgraph_trigger_overlay_composite(NV2AState *d);
-			pgraph_trigger_overlay_composite(d);
+		// Mark overlay as dirty so the puller thread presents at VBlank rate.
+		// Do NOT call flip_stall inline — it costs ~6ms and PVIDEO_BUFFER is
+		// written ~961 times/sec during video playback (only 24-30 new frames).
+		if (d->enable_overlay) {
+			d->overlay_dirty = true;
+			SetEvent(d->pfifo.puller_event);
 		}
 		break;
 	case NV_PVIDEO_STOP:
@@ -109,4 +119,3 @@ DEVICE_WRITE32(PVIDEO)
 
 	DEVICE_WRITE32_END(PVIDEO);
 }
-

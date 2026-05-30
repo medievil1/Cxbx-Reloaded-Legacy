@@ -75,11 +75,21 @@ DEVICE_WRITE32(PMC)
 {
 	switch(addr) {
 	case NV_PMC_INTR_0:
+		NV2AIrqDebugLog(
+			"NV2A PMC ack: write=0x%08X pending_before=0x%08X pending_after=0x%08X enabled=0x%08X",
+			value,
+			d->pmc.pending_interrupts,
+			d->pmc.pending_interrupts & ~value,
+			d->pmc.enabled_interrupts);
         /* the bits of the interrupts to clear are wrtten */
 		d->pmc.pending_interrupts &= ~value;
 		update_irq(d);
 		break;
 	case NV_PMC_INTR_EN_0:
+		NV2AIrqDebugLog(
+			"NV2A PMC enable: old=0x%08X new=0x%08X",
+			d->pmc.enabled_interrupts,
+			value);
 		d->pmc.enabled_interrupts = value;
 		update_irq(d);
 		break;
@@ -90,5 +100,4 @@ DEVICE_WRITE32(PMC)
 
 	DEVICE_WRITE32_END(PMC);
 }
-
 

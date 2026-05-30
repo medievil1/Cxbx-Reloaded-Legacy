@@ -542,12 +542,25 @@ xbox::hresult_xt WINAPI xbox::EMUPATCH(CDirectSound_CommitDeferredSettings)
 {
     DSoundMutexGuardLock;
 
-	LOG_FUNC_ONE_ARG(pThis);
+	//LOG_FUNC_ONE_ARG(pThis); // Disabled: prevents log flooding from tight polling loops
 
     HRESULT hRet = DS_OK;
     if (g_pDSoundPrimary3DListener8 != nullptr) {
         hRet = g_pDSoundPrimary3DListener8->CommitDeferredSettings();
     }
+
+    // Process pending stream packets (Option A+C from the plan):
+    // This is safe because we already hold DSoundMutexGuardLock and are on
+    // the game thread, same context as DirectSoundDoWork. Games that poll
+    // CommitDeferredSettings will now also advance audio stream state.
+    if (g_bDSoundCreateCalled) {
+        xbox::LARGE_INTEGER getTime;
+        xbox::KeQuerySystemTime(&getTime);
+        DirectSoundDoWork_Stream(getTime);
+    }
+
+    // Yield to prevent tight-loop starvation of other threads
+    SwitchToThread();
 
     RETURN_RESULT_CHECK(hRet);
 }
@@ -561,7 +574,7 @@ xbox::hresult_xt WINAPI xbox::EMUPATCH(IDirectSound_CommitDeferredSettings)
 {
     DSoundMutexGuardLock;
 
-    LOG_FORWARD("CDirectSound_CommitDeferredSettings");
+    //LOG_FORWARD("CDirectSound_CommitDeferredSettings"); // Disabled: prevents log flooding from tight polling loops
 
     return xbox::EMUPATCH(CDirectSound_CommitDeferredSettings)(pThis);
 }

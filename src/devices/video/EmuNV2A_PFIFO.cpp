@@ -112,10 +112,21 @@ DEVICE_WRITE32(PFIFO)
 
 	switch(addr) {
 		case NV_PFIFO_INTR_0:
+			NV2AIrqDebugLog(
+				"NV2A PFIFO ack: write=0x%08X pending_before=0x%08X pending_after=0x%08X enabled=0x%08X",
+				value,
+				d->pfifo.pending_interrupts,
+				d->pfifo.pending_interrupts & ~value,
+				d->pfifo.enabled_interrupts);
 			d->pfifo.pending_interrupts &= ~value;
 			update_irq(d);
 			break;
 		case NV_PFIFO_INTR_EN_0:
+			NV2AIrqDebugLog(
+				"NV2A PFIFO enable: old=0x%08X new=0x%08X pending=0x%08X",
+				d->pfifo.enabled_interrupts,
+				value,
+				d->pfifo.pending_interrupts);
 			d->pfifo.enabled_interrupts = value;
 			update_irq(d);
 			break;
@@ -213,6 +224,9 @@ int pfifo_puller_thread(NV2AState *d)
     CxbxSetThreadName("Cxbx NV2A FIFO puller");
     CxbxSetPullerContext(true);
 
+    static constexpr int DEFAULT_VBLANK_HZ = 60;
+    static constexpr DWORD OVERLAY_POLL_INTERVAL_MS = 16;
+
     qemu_mutex_lock(&d->pfifo.pfifo_lock);
     while (!d->exiting) {
         bool had_commands = pfifo_run_puller(d);
@@ -232,15 +246,23 @@ int pfifo_puller_thread(NV2AState *d)
                 qemu_mutex_unlock(&d->pfifo.pfifo_lock);
                 g_pgraph_backend.flip_stall(d);
                 qemu_mutex_lock(&d->pfifo.pfifo_lock);
-            } else if (d->enable_overlay && !g_PullerFlipStallThisCycle) {
-                // PVIDEO overlay present: composite and display the overlay
-                // at frame rate. Only skip when FLIP_STALL already presented
-                // this cycle (it composites overlay too). Clear draw_dirty
-                // so stale 3D→FMV transition state doesn't block anything.
-                d->pgraph.surface_color.draw_dirty = false;
-                qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-                g_pgraph_backend.flip_stall(d);
-                qemu_mutex_lock(&d->pfifo.pfifo_lock);
+            } else if (d->enable_overlay && d->overlay_dirty && !g_PullerFlipStallThisCycle) {
+                // PVIDEO overlay present: composite and display the overlay.
+                // Rate-limit to VBlank interval (~16.67ms at 60Hz) to avoid
+                // presenting 961 times/sec when the video frame only changes
+                // 24-30 times.  Uses QPC for sub-ms timing accuracy.
+                LARGE_INTEGER now;
+                QueryPerformanceCounter(&now);
+                int64_t elapsed = now.QuadPart - d->overlay_last_present_qpc;
+                int64_t vblank_ticks = d->vblank_period > 0 ? d->vblank_period : (HostQPCFrequency / DEFAULT_VBLANK_HZ);
+                if (elapsed >= vblank_ticks) {
+                    d->overlay_dirty = false;
+                    d->overlay_last_present_qpc = now.QuadPart;
+                    d->pgraph.surface_color.draw_dirty = false;
+                    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+                    g_pgraph_backend.flip_stall(d);
+                    qemu_mutex_lock(&d->pfifo.pfifo_lock);
+                }
             }
             g_PullerFlipStallThisCycle = false;
         }
@@ -255,8 +277,11 @@ int pfifo_puller_thread(NV2AState *d)
         // registers.  Use a simple auto-reset event (puller_event) instead of
         // qemu_cond — any thread can signal it without holding pfifo_lock,
         // eliminating the deadlock-prone continue_event protocol.
+        // Use timed wait (16ms) when overlay is active so rate-limited presents
+        // fire at VBlank rate even without explicit signals.
         qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-        WaitForSingleObject(d->pfifo.puller_event, INFINITE);
+        DWORD waitMs = (d->enable_overlay && d->overlay_dirty) ? OVERLAY_POLL_INTERVAL_MS : INFINITE;
+        WaitForSingleObject(d->pfifo.puller_event, waitMs);
         qemu_mutex_lock(&d->pfifo.pfifo_lock);
     }
     qemu_mutex_unlock(&d->pfifo.pfifo_lock);
@@ -757,6 +782,18 @@ int pfifo_pusher_thread(NV2AState *d)
         if (d->pfifo.flush_requested) {
             d->pfifo.flush_requested = false;
             qemu_cond_signal(&d->pfifo.flush_complete_cond);
+        }
+
+        // Check for pending work before sleeping.  cond_signal is a no-op if
+        // we aren't waiting, so new DMA_PUT writes that arrived while
+        // pfifo_run_pusher was running (lock released) would be lost without
+        // this predicate check.
+        {
+            uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
+            uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
+            if (get_v != put_v) {
+                continue; // More work arrived — process it immediately
+            }
         }
 
         qemu_cond_wait(&d->pfifo.pusher_cond, &d->pfifo.pfifo_lock);

@@ -29,6 +29,8 @@ xbox::CUnknownTemplate::CUnknownTemplate() { ref_count = 1; }
 
 xbox::CMcpxVoiceClient::_settings xbox::CMcpxVoiceClient::default_settings =
 {
-    0,                              // 0x08
-                                    // ...
+    {},                             // Unknown2_pre (0x08 - 0x30)
+    0,                              // dwBufferAllocSize (0x30)
+    0,                              // pPlayCursor (0x34)
+    {},                             // Unknown2_post (0x38 - 0x300)
 };

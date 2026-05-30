@@ -175,6 +175,16 @@ void KeClearDpcPending()
 	g_DpcData.IsDpcPending.clear();
 }
 
+// Returns true if the DPC queue has entries waiting to be dispatched.
+// Used by the background DPC thread to detect self-re-queuing DPCs.
+bool KeIsDpcQueueNonEmpty()
+{
+	EnterCriticalSection(&(g_DpcData.Lock));
+	bool result = !IsListEmpty(&(g_DpcData.DpcQueue));
+	LeaveCriticalSection(&(g_DpcData.Lock));
+	return result;
+}
+
 // Wake the main DPC thread to dispatch a hardware interrupt (called from system_events thread)
 void KeSignalVBlankPending()
 {
@@ -504,13 +514,26 @@ void ExecuteDpcQueue(bool inline_dispatch)
 		return;
 	}
 
-	// Are there entries in the DpqQueue?
+	// Snapshot the current queue tail so we only process DPCs that were
+	// queued at entry time.  If a DPC routine re-queues itself (or queues
+	// new DPCs), those entries are appended AFTER this sentinel and will
+	// NOT be dispatched in this pass — they'll be picked up by the next
+	// DPC dispatch cycle (triggered by HalRequestSoftwareInterrupt).
+	// This prevents infinite loops when a DPC unconditionally re-queues itself.
+	xbox::PLIST_ENTRY sentinel = g_DpcData.DpcQueue.Blink;
+
+	// Are there entries in the DpcQueue?
 	while (!IsListEmpty(&(g_DpcData.DpcQueue)))
 	{
 		// Extract the head entry and retrieve the containing KDPC pointer for it:
-		pkdpc = CONTAINING_RECORD(RemoveHeadList(&(g_DpcData.DpcQueue)), xbox::KDPC, DpcListEntry);
+		xbox::PLIST_ENTRY headEntry = RemoveHeadList(&(g_DpcData.DpcQueue));
+		pkdpc = CONTAINING_RECORD(headEntry, xbox::KDPC, DpcListEntry);
 		// Mark it as no longer linked into the DpcQueue
 		pkdpc->Inserted = FALSE;
+
+		// Determine if this was the last entry we should process this pass
+		bool was_last = (headEntry == sentinel);
+
 		// Set per-thread DpcRoutineActive for re-entrancy protection and
 		// KeIsExecutingDpc reporting. Don't touch g_DpcRoutineActive here —
 		// it's reserved for game-level suppression (fs:0x58 writes) and the
@@ -529,10 +552,25 @@ void ExecuteDpcQueue(bool inline_dispatch)
 
 		EnterCriticalSection(&(g_DpcData.Lock));
 		KeGetCurrentPrcb()->DpcRoutineActive = FALSE;
+
+		// Stop after processing all entries that were queued at entry time.
+		// Newly queued DPCs will be handled in the next dispatch cycle.
+		if (was_last) {
+			break;
+		}
 	}
 
-	// NOTE: IsDpcPending is now cleared at the start of the DPC loop iteration
-	// (in CxbxKrnlMain) to prevent lost-wake races. Do NOT clear it here.
+	// If there are still DPCs in the queue (added during this dispatch pass)
+	// and we were called from the inline path (KeInsertQueueDpc), signal the
+	// background DPC thread so it picks them up. When called from the background
+	// thread itself (inline_dispatch=false), do NOT re-signal — that would cause
+	// an infinite tight loop for self-re-queuing DPCs.  The background thread
+	// will naturally re-check the queue after yielding (see the Sleep(1) in the
+	// DPC thread loop).
+	if (inline_dispatch && !IsListEmpty(&(g_DpcData.DpcQueue))) {
+		g_DpcData.IsDpcPending.test_and_set();
+		g_DpcData.IsDpcPending.notify_one();
+	}
 
 	LeaveCriticalSection(&(g_DpcData.Lock));
 }

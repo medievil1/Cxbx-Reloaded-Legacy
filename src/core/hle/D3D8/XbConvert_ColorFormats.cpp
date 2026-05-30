@@ -949,8 +949,11 @@ void ____YUY2ToARGBRow_C(const uint8_t* src_yuy2,
 	uint8_t* rgb_buf,
 	int width) {
 	const struct YuvConstants* yuvconstants = &kYuvIConstants; // hack to avoid another argument
-	int x;
-	for (x = 0; x < width - 1; x += 2) {
+
+	int x = 0;
+
+	// Scalar conversion: process 2 pixels (one YUY2 macro-pixel) per iteration
+	for (; x < width - 1; x += 2) {
 		YuvPixel(src_yuy2[0], src_yuy2[1], src_yuy2[3],
 			rgb_buf + 0, rgb_buf + 1, rgb_buf + 2, yuvconstants);
 		rgb_buf[3] = 255;
@@ -958,7 +961,7 @@ void ____YUY2ToARGBRow_C(const uint8_t* src_yuy2,
 			rgb_buf + 4, rgb_buf + 5, rgb_buf + 6, yuvconstants);
 		rgb_buf[7] = 255;
 		src_yuy2 += 4;
-		rgb_buf += 8;  // Advance 2 pixels.
+		rgb_buf += 8;
 	}
 	if (width & 1) {
 		YuvPixel(src_yuy2[0], src_yuy2[1], src_yuy2[3],

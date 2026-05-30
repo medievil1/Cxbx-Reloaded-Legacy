@@ -145,6 +145,10 @@ DEVICE_WRITE32(USER)
 			case NV_USER_DMA_PUT: {
 				d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
 				if (!d->enable_overlay) {
+					// Process commands inline on the game thread (synchronous).
+					// This ensures NV097_FLIP_STALL is handled before the game
+					// continues, preventing lost-signal races with the async
+					// pusher thread and guaranteeing deterministic present timing.
 					uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
 					uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
 					bool pusher_can_run = GET_MASK(push0, NV_PFIFO_CACHE1_PUSH0_ACCESS)
@@ -155,37 +159,13 @@ DEVICE_WRITE32(USER)
 						CxbxSetPullerContext(true);
 						pfifo_run_pusher(d);
 						CxbxSetPullerContext(false);
-	qemu_mutex_lock(&d->pfifo.pfifo_lock);
-
-	// During overlay (video), bypass pfifo_lock and inline processing.
-	// The puller holds pfifo_lock during its main loop, causing 13ms
-	// blocking delays. 32-bit atomic writes are safe on x86.  Overlay
-	// compositing is triggered inline from the PVIDEO write handler.
-	if (d->enable_overlay) {
-		qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-		uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
-		if (channel_modes & (1 << channel_id)) {
-			unsigned int cur_channel_id =
-				GET_MASK(d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH1)],
-					NV_PFIFO_CACHE1_PUSH1_CHID);
-			if (channel_id == cur_channel_id) {
-				switch (addr & 0xFFFF) {
-				case NV_USER_DMA_PUT:
-					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
-					break;
-				case NV_USER_DMA_GET:
-					d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = value;
-					break;
-				case NV_USER_REF:
-					d->pfifo.regs[RI(NV_PFIFO_CACHE1_REF)] = value;
-					break;
-				default: break;
-				}
-			}
-		}
-		DEVICE_WRITE32_END(USER);
-	}
+						qemu_mutex_lock(&d->pfifo.pfifo_lock);
 					}
+				} else {
+					// During overlay (video playback), process asynchronously.
+					// Inline processing would block the game thread for 13ms+
+					// because flip_stall composites the overlay every frame.
+					qemu_cond_signal(&d->pfifo.pusher_cond);
 				}
 				break;
 			}
@@ -201,11 +181,7 @@ DEVICE_WRITE32(USER)
 			}
 
             // Kick puller thread (for auto-present fallback on raw-pushbuffer
-            // games without explicit FLIP_STALL).  Do NOT signal pusher_cond:
-            // command processing is driven exclusively by inline flushes
-            // (pfifo_flush_to_pgraph called from DMA_GET reads and before draws).
-            // Signaling the pusher would cause it to race for pfifo_lock,
-            // introducing intermittent stalls in the game thread.
+            // games without explicit FLIP_STALL).
             SetEvent(d->pfifo.puller_event);
 		} else {
 			/* ramfc */

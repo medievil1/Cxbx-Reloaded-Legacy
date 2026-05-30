@@ -1393,8 +1393,12 @@ static void CxbxrKrnlInitHacks()
 		// Dispatch GPU hardware interrupt (IRQ 3) on this thread BEFORE running DPCs.
 		// Check NV2A hardware state DIRECTLY instead of HalSystemInterrupt::IsPending()
 		// to avoid races from non-atomic boolean members accessed by multiple threads.
-		// Use a do-while to re-check after processing: if new interrupts arrived during
-		// ISR/DPC execution, handle them immediately instead of risking a lost wakeup.
+		// Use a do-while to re-check after ISR processing: if new interrupts arrived
+		// during ISR execution, handle them immediately instead of risking a lost wakeup.
+		// DPC dispatch is performed AFTER the ISR loop completes, matching real Xbox
+		// behavior where DPCs fire once when IRQL drops from DEVICE_LEVEL through
+		// DISPATCH_LEVEL. This prevents infinite loops from self-re-queuing DPCs when
+		// combined with persistent (unacknowledged) NV2A interrupt state.
 		bool more_work;
 		do {
 			more_work = false;
@@ -1458,6 +1462,17 @@ static void CxbxrKrnlInitHacks()
 					 (d->pcrtc.pending_interrupts & d->pcrtc.enabled_interrupts) ||
 					 (d->ptimer.pending_interrupts & d->ptimer.enabled_interrupts) ||
 					 pvideo_pending);
+				uint32_t nv2a_irq_mask = 0;
+				if (d->pfifo.pending_interrupts & d->pfifo.enabled_interrupts)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PFIFO;
+				if (d->pgraph.pending_interrupts & d->pgraph.enabled_interrupts)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PGRAPH;
+				if (d->pcrtc.pending_interrupts & d->pcrtc.enabled_interrupts)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PCRTC;
+				if (pvideo_pending)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PVIDEO;
+				if (d->ptimer.pending_interrupts & d->ptimer.enabled_interrupts)
+					nv2a_irq_mask |= NV_PMC_INTR_0_PTIMER;
 
 				// PGRAPH INTR_ERROR (D3DDevice_InsertCallback) stalls the GPU
 				// pipeline until the CPU acknowledges it. When pmc_en=0, the
@@ -1473,36 +1488,107 @@ static void CxbxrKrnlInitHacks()
 
 				if (nv2a_irq_pending &&
 				    EmuInterruptList[3] && EmuInterruptList[3]->Connected) {
+					static uint32_t s_last_nv2a_irq_mask = 0xffffffff;
+					static uint32_t s_last_pmc_enable = 0xffffffff;
+					static uint32_t s_last_pfifo_pending = 0xffffffff;
+					static uint32_t s_last_pfifo_enabled = 0xffffffff;
+					static uint32_t s_last_pgraph_pending = 0xffffffff;
+					static uint32_t s_last_pgraph_enabled = 0xffffffff;
+					static uint32_t s_last_pcrtc_pending = 0xffffffff;
+					static uint32_t s_last_pcrtc_enabled = 0xffffffff;
+					static uint32_t s_last_ptimer_pending = 0xffffffff;
+					static uint32_t s_last_ptimer_enabled = 0xffffffff;
+					static uint32_t s_last_pvideo_pending = 0xffffffff;
+					static uint32_t s_last_pvideo_enabled = 0xffffffff;
+					static uint32_t s_repeat_count = 0;
+
+					bool irq_state_changed =
+						s_last_nv2a_irq_mask != nv2a_irq_mask ||
+						s_last_pmc_enable != d->pmc.enabled_interrupts ||
+						s_last_pfifo_pending != d->pfifo.pending_interrupts ||
+						s_last_pfifo_enabled != d->pfifo.enabled_interrupts ||
+						s_last_pgraph_pending != d->pgraph.pending_interrupts ||
+						s_last_pgraph_enabled != d->pgraph.enabled_interrupts ||
+						s_last_pcrtc_pending != d->pcrtc.pending_interrupts ||
+						s_last_pcrtc_enabled != d->pcrtc.enabled_interrupts ||
+						s_last_ptimer_pending != d->ptimer.pending_interrupts ||
+						s_last_ptimer_enabled != d->ptimer.enabled_interrupts ||
+						s_last_pvideo_pending != d->pvideo.pending_interrupts ||
+						s_last_pvideo_enabled != d->pvideo.enabled_interrupts;
+
+					if (irq_state_changed || ((++s_repeat_count & 0x3ff) == 0)) {
+						NV2AIrqDebugLog(
+							"NV2A IRQ3 trigger: mask=0x%08X pmc_en=0x%08X pfifo=%08X/%08X pgraph=%08X/%08X pcrtc=%08X/%08X ptimer=%08X/%08X pvideo=%08X/%08X repeat=%u",
+							nv2a_irq_mask,
+							d->pmc.enabled_interrupts,
+							d->pfifo.pending_interrupts,
+							d->pfifo.enabled_interrupts,
+							d->pgraph.pending_interrupts,
+							d->pgraph.enabled_interrupts,
+							d->pcrtc.pending_interrupts,
+							d->pcrtc.enabled_interrupts,
+							d->ptimer.pending_interrupts,
+							d->ptimer.enabled_interrupts,
+							d->pvideo.pending_interrupts,
+							d->pvideo.enabled_interrupts,
+							s_repeat_count);
+						s_last_nv2a_irq_mask = nv2a_irq_mask;
+						s_last_pmc_enable = d->pmc.enabled_interrupts;
+						s_last_pfifo_pending = d->pfifo.pending_interrupts;
+						s_last_pfifo_enabled = d->pfifo.enabled_interrupts;
+						s_last_pgraph_pending = d->pgraph.pending_interrupts;
+						s_last_pgraph_enabled = d->pgraph.enabled_interrupts;
+						s_last_pcrtc_pending = d->pcrtc.pending_interrupts;
+						s_last_pcrtc_enabled = d->pcrtc.enabled_interrupts;
+						s_last_ptimer_pending = d->ptimer.pending_interrupts;
+						s_last_ptimer_enabled = d->ptimer.enabled_interrupts;
+						s_last_pvideo_pending = d->pvideo.pending_interrupts;
+						s_last_pvideo_enabled = d->pvideo.enabled_interrupts;
+						if (irq_state_changed) {
+							s_repeat_count = 0;
+						}
+					}
 					HalSystemInterrupts[3].Trigger(EmuInterruptList[3]);
 				}
 			}
 
-			// Dispatch all pending DPCs. This thread is the primary DPC
-			// dispatcher — timer expirations (KiTimerExpiration) and other
-			// system DPCs rely on it. The combined g_DpcRoutineActive /
-			// per-thread PRCB guard inside ExecuteDpcQueue prevents dispatch
-			// when game code has set DpcRoutineActive (via fs:0x58 writes)
-			// or when we're already dispatching on this thread.
-			ExecuteDpcQueue();
-
-			// Re-check: if NV2A interrupts are still pending after ISR+DPC processing,
-			// loop back immediately. This catches cases where:
-			// - A new NV097_NO_OPERATION fired while the DPC was running
-			// - The DPC re-enabled PMC and update_irq found more pending work
-			// - A VBlank arrived during processing
+			// Re-check: if a genuinely new VBlank arrived during ISR processing,
+			// loop back to latch and service it. Only vblank_pending represents
+			// a new event (set by the VBlank timer). Persistent interrupt state
+			// (e.g. unacknowledged PTIMER) is NOT a reason to loop — the ISR
+			// already had a chance to clear it and chose not to.
 			if (g_bEnableAllInterrupts && g_NV2A) {
 				NV2AState* d = g_NV2A->GetDeviceState();
-				if (d->vblank_pending.test() ||
-				    (d->pmc.enabled_interrupts &&
-				     ((d->pgraph.pending_interrupts & d->pgraph.enabled_interrupts) ||
-				      (d->pfifo.pending_interrupts & d->pfifo.enabled_interrupts) ||
-				      (d->pcrtc.pending_interrupts & d->pcrtc.enabled_interrupts) ||
-				      (d->ptimer.pending_interrupts & d->ptimer.enabled_interrupts))) ||
-				    (d->pgraph.pending_interrupts & NV_PGRAPH_INTR_ERROR)) {
+				if (d->vblank_pending.test()) {
 					more_work = true;
 				}
 			}
 		} while (more_work);
+
+		// Dispatch all pending DPCs AFTER ISR processing completes.
+		// This matches real Xbox behavior: on hardware, DPCs fire once when
+		// IRQL drops from DEVICE_LEVEL through DISPATCH_LEVEL after all ISRs
+		// complete. Self-re-queuing DPCs will be dispatched on the next
+		// wake-up cycle (rate-limited by Sleep(1) below), preventing infinite
+		// tight loops when a DPC unconditionally re-queues itself.
+		ExecuteDpcQueue();
+
+		// If DPCs are still pending after dispatch (self-re-queuing DPCs),
+		// yield briefly to prevent starvation of other threads.  On real Xbox
+		// hardware, self-re-queuing DPCs would only fire on the next timer
+		// tick (~1ms).  Sleep(1) approximates this natural rate-limiting.
+		// We self-signal IsDpcPending so the next KeWaitForDpc doesn't block
+		// waiting for an external event (VBlank/PTIMER) — the DPC needs to
+		// re-fire regardless of interrupt sources.
+		{
+			extern bool KeIsDpcQueueNonEmpty();
+			if (KeIsDpcQueueNonEmpty()) {
+				Sleep(1);
+				extern void KeSignalVBlankPending();
+				KeSignalVBlankPending();
+				continue;  // Re-dispatch without blocking on KeWaitForDpc
+			}
+		}
 
 		// Check for present stalls — if no present has arrived in 5 seconds,
 		// dump all thread stacks to diagnose what's blocking progress.

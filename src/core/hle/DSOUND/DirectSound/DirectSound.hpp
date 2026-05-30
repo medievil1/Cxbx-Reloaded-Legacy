@@ -115,6 +115,9 @@ struct EmuDirectSoundBuffer
 		// True if the buffer has been played, and should be considered for streaming
 		bool playRequested = false;
 	} EmuStreamingInfo;
+    // Memory-mapped play cursor for games that busy-poll the APU hardware position.
+    // CMcpxVoiceClient+0x34 points to this field so games can read the current position directly.
+    DWORD                   Xb_playCursor = 0;
 };
 
 struct XbHybridDSBuffer : DSBUFFER_S::DSBUFFER_I {
