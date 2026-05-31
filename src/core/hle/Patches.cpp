@@ -52,6 +52,41 @@ const uint32_t PATCH_IS_FIBER = 1 << 4;
 #define PATCH_ENTRY(Name, Func, Flags) \
     { Name, xbox_patch_t { (void *)&Func, Flags} }
 
+// D3D_BlockOnTime HLE: The native Xbox function uses a spin loop that polls
+// a cached DMA_GET value in game memory, waiting for the GPU to consume commands
+// up to a fence position.  In Cxbx-Reloaded, pushbuffer commands are either
+// processed inline on the same thread (non-overlay) or dispatched to the pusher
+// thread (overlay).  In both cases the game's cached DMA_GET is never updated,
+// so the spin loop spins forever.  Since all commands are already fully consumed
+// before BlockOnTime is called, the function can safely return immediately.
+namespace xbox {
+	void_xt WINAPI EMUPATCH(D3D_BlockOnTime)
+	(
+		dword_xt Time,
+		int_xt   MakeSpace
+	)
+	{
+		return;
+	}
+
+	__declspec(naked) void_xt WINAPI EMUPATCH(D3D_BlockOnTime_4__LTCG_eax1)
+	(
+		int_xt MakeSpace
+	)
+	{
+		dword_xt Time;
+		__asm {
+			LTCG_PROLOGUE
+			mov  Time, eax
+		}
+		EMUPATCH(D3D_BlockOnTime)(Time, MakeSpace);
+		__asm {
+			LTCG_EPILOGUE
+			ret  4
+		}
+	}
+}
+
 // Map of Xbox Patch names to Emulator Patches
 // A std::string is used as it's possible for a symbol to have multiple names
 // This allows for the eventual importing of Dxbx symbol files and even IDA signatures too!
@@ -303,12 +338,11 @@ std::map<const std::string, const xbox_patch_t> g_PatchTable = {
 	//PATCH_ENTRY("D3DDevice_UpdateOverlay_16__LTCG_eax2", xbox::EMUPATCH(D3DDevice_UpdateOverlay_16__LTCG_eax2), PATCH_HLE_D3D),
 	// Disabled: empty LOG_UNIMPLEMENTED stub, Xbox native code polls resource state
 	//PATCH_ENTRY("D3DResource_BlockUntilNotBusy", xbox::EMUPATCH(D3DResource_BlockUntilNotBusy), PATCH_HLE_D3D),
-	// D3D_BlockOnTime: unpatched — native D3D_BlockOnTime uses semaphore,
-	// wait-for-idle, and nop methods pushed into the command buffer.
-	// The DMA_PUT write handler processes commands inline (pfifo_run_pusher),
-	// so completion signals fire and the native wait returns naturally.
-	//PATCH_ENTRY("D3D_BlockOnTime", xbox::EMUPATCH(D3D_BlockOnTime), PATCH_HLE_D3D),
-	//PATCH_ENTRY("D3D_BlockOnTime_4__LTCG_eax1", xbox::EMUPATCH(D3D_BlockOnTime_4__LTCG_eax1), PATCH_HLE_D3D),
+	// D3D_BlockOnTime: HLE-patched to prevent deadlock.  The native spin loop
+	// polls a cached DMA_GET in game memory that Cxbx never updates.  See the
+	// HLE stubs defined above for details.
+	PATCH_ENTRY("D3D_BlockOnTime", xbox::EMUPATCH(D3D_BlockOnTime), PATCH_HLE_D3D),
+	PATCH_ENTRY("D3D_BlockOnTime_4__LTCG_eax1", xbox::EMUPATCH(D3D_BlockOnTime_4__LTCG_eax1), PATCH_HLE_D3D),
 	//PATCH_ENTRY("D3D_CommonSetRenderTarget", xbox::EMUPATCH(D3D_CommonSetRenderTarget), PATCH_HLE_D3D),
 	// Disabled: host resources are NV2A-derived (PGRAPH RT cache, texture cache keyed by VRAM).
 	// Dirty page tracking invalidates stale host resources. FreeHostResource on Xbox D3D keys is vestigial.

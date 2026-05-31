@@ -316,6 +316,8 @@ const char *CxbxGetErrorDescription(HRESULT hResult);
    	XB_MACRO(xbox::void_xt,       WINAPI,     CDevice_SetStateVB_8,                               (xbox::addr_xt, xbox::ulong_xt)                                                                       );  \
    	XB_MACRO(xbox::void_xt,       WINAPI,     CDevice_SetStateUP,                                 ()                                                                                                    );  \
    	XB_MACRO(xbox::void_xt,       WINAPI,     CDevice_SetStateUP_4,                               (xbox::addr_xt)                                                                                       );  \
+   	XB_MACRO(xbox::void_xt,       WINAPI,     D3D_BlockOnTime,                                    (xbox::dword_xt, xbox::int_xt)                                                                        );  \
+   	XB_MACRO(xbox::void_xt,       WINAPI,     D3D_BlockOnTime_4__LTCG_eax1,                       (xbox::int_xt)                                                                                        );  \
 
 // Generate extern declarations for trampoline function pointers.
 // Each expands to a typedef + extern variable declaration.
