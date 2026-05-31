@@ -65,6 +65,10 @@ DEVICE_READ32(PFIFO)
                                && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
                                && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
             if (!pusher_can_run) {
+                uint32_t* dma_subroutine = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_SUBROUTINE)];
+                if (GET_MASK(*dma_subroutine, NV_PFIFO_CACHE1_DMA_SUBROUTINE_STATE)) {
+                    SET_MASK(*dma_subroutine, NV_PFIFO_CACHE1_DMA_SUBROUTINE_STATE, 0);
+                }
                 d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
                 get_v = put_v;
             } else {
@@ -491,6 +495,12 @@ void pfifo_flush_to_pgraph(NV2AState *d)
             CxbxSetPullerContext(false);
         } else {
             // Advance GET past the unprocessable commands.
+            // Clear DMA subroutine state to avoid stale subroutine_state downstream.
+            uint32_t* dma_subroutine = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_SUBROUTINE)];
+            if (GET_MASK(*dma_subroutine, NV_PFIFO_CACHE1_DMA_SUBROUTINE_STATE)) {
+                EmuLog(LOG_LEVEL::WARNING, "PFIFO flush: clearing stale subroutine state (GET advanced without RETURN)");
+                SET_MASK(*dma_subroutine, NV_PFIFO_CACHE1_DMA_SUBROUTINE_STATE, 0);
+            }
             d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
         }
     }
@@ -663,22 +673,17 @@ static void pfifo_run_pusher(NV2AState *d)
 			} else if ((word & 3) == 2) {
 				/* call */
                 if (subroutine_state) {
-                    SET_MASK(*dma_state, NV_PFIFO_CACHE1_DMA_STATE_ERROR,
-                             NV_PFIFO_CACHE1_DMA_STATE_ERROR_CALL);
-                    break;
-                } else {
-                    *dma_subroutine = dma_get_v;
-                    SET_MASK(*dma_subroutine,
-                             NV_PFIFO_CACHE1_DMA_SUBROUTINE_STATE, 1);
-                    dma_get_v = word & 0xfffffffc;
-                    NV2A_DPRINTF("pb CALL 0x%08X\n", dma_get_v);
+                    EmuLog(LOG_LEVEL::WARNING, "PFIFO: Nested CALL detected, replacing previous subroutine");
                 }
+                *dma_subroutine = dma_get_v;
+                SET_MASK(*dma_subroutine,
+                         NV_PFIFO_CACHE1_DMA_SUBROUTINE_STATE, 1);
+                dma_get_v = word & 0xfffffffc;
+                NV2A_DPRINTF("pb CALL 0x%08X\n", dma_get_v);
             } else if (word == 0x00020000) {
                 /* return */
                 if (!subroutine_state) {
-                    SET_MASK(*dma_state, NV_PFIFO_CACHE1_DMA_STATE_ERROR,
-                             NV_PFIFO_CACHE1_DMA_STATE_ERROR_RETURN);
-                    // break;
+                    EmuLog(LOG_LEVEL::WARNING, "PFIFO: RETURN without active subroutine, ignoring");
                 } else {
                     dma_get_v = *dma_subroutine & 0xfffffffc;
                     SET_MASK(*dma_subroutine,
@@ -737,8 +742,8 @@ static void pfifo_run_pusher(NV2AState *d)
 
         SET_MASK(*dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS, 1); /* suspended */
 
-        // d->pfifo.pending_interrupts |= NV_PFIFO_INTR_0_DMA_PUSHER;
-        // update_irq(d);
+        d->pfifo.pending_interrupts |= NV_PFIFO_INTR_0_DMA_PUSHER;
+        update_irq(d);
     }
 }
 

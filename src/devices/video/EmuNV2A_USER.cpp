@@ -54,6 +54,10 @@ DEVICE_READ32(USER)
 			                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
 			                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
 			if (!pusher_can_run) {
+				uint32_t* dma_subroutine = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_SUBROUTINE)];
+				if (GET_MASK(*dma_subroutine, NV_PFIFO_CACHE1_DMA_SUBROUTINE_STATE)) {
+					SET_MASK(*dma_subroutine, NV_PFIFO_CACHE1_DMA_SUBROUTINE_STATE, 0);
+				}
 				d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)] = put_v;
 				get_v = put_v;
 			} else {
