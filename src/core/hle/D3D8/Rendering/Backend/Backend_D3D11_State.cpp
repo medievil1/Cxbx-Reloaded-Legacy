@@ -239,7 +239,27 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 				? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
 
 			unsigned int zfunc = GET_MASK(ctrl0, NV_PGRAPH_CONTROL_0_ZFUNC);
-			g_D3D11DepthStencilDesc.DepthFunc = (D3D11_COMPARISON_FUNC)(zfunc + 1);
+			// W-buffer mode (Z_PERSPECTIVE_ENABLE=1): the depth buffer stores 1/clip_w
+			// (rhw).  Larger values are nearer, opposite to Z-buffer convention.
+			// Invert LESS↔GREATER and LEQUAL↔GEQUAL so D3D11 correctly rejects far
+			// fragments that arrive after near ones have already been written.
+			// NEVER/EQUAL/NOT_EQUAL/ALWAYS are symmetric under inversion and unchanged.
+			if (ctrl0 & NV_PGRAPH_CONTROL_0_Z_PERSPECTIVE_ENABLE) {
+				static const D3D11_COMPARISON_FUNC kWBufInvert[8] = {
+					D3D11_COMPARISON_NEVER,         // 0 NEVER   → NEVER
+					D3D11_COMPARISON_GREATER,       // 1 LESS    → GREATER
+					D3D11_COMPARISON_EQUAL,         // 2 EQUAL   → EQUAL
+					D3D11_COMPARISON_GREATER_EQUAL, // 3 LEQUAL  → GEQUAL
+					D3D11_COMPARISON_LESS,          // 4 GREATER → LESS
+					D3D11_COMPARISON_NOT_EQUAL,     // 5 NOTEQUAL→ NOT_EQUAL
+					D3D11_COMPARISON_LESS_EQUAL,    // 6 GEQUAL  → LEQUAL
+					D3D11_COMPARISON_ALWAYS,        // 7 ALWAYS  → ALWAYS
+				};
+				g_D3D11DepthStencilDesc.DepthFunc = (zfunc < 8) ? kWBufInvert[zfunc]
+				                                                  : D3D11_COMPARISON_ALWAYS;
+			} else {
+				g_D3D11DepthStencilDesc.DepthFunc = (D3D11_COMPARISON_FUNC)(zfunc + 1);
+			}
 
 			g_D3D11DepthStencilDesc.StencilEnable = (ctrl1 & NV_PGRAPH_CONTROL_1_STENCIL_TEST_ENABLE) ? TRUE : FALSE;
 
