@@ -518,28 +518,36 @@ void CxbxUpdateHostViewPortOffsetAndScaleConstants()
 	float xboxScreenspaceWidth = xboxRenderTargetWidth * screenScaleX;
 	float xboxScreenspaceHeight = xboxRenderTargetHeight * screenScaleY;
 
-	// Z output scale: read directly from NV2A viewport scale Z component (VPSCL.z).
-	// The game's VS multiplies clip-space Z by this value (via reserved constant c-38.z).
-	// We divide by it to reverse back to normalized [0,1] for D3D11.
-	// Clamp to host depth format range: since we use D24_UNORM (max representable = 1.0),
-	// extremely large scales (e.g. 1e30 for F24S8) would lose precision in the dp4 math.
-	// The host stores depth as UNORM regardless of Xbox float format, so the effective
-	// max is limited by the host format's integer depth range.
-	float zOutputScale = 1.0f;
+	// Z output scale: use the format-based zmax, matching xemu's approach.
+	// The NV2A XVS multiplies clip-space Z by VPSCL.z which always equals the
+	// depth format's maximum representable value.  Using the same format-derived
+	// constant here ensures correct depth normalisation to [0,1] regardless of
+	// when VPSCL.z is programmed in the push buffer.  Reading VPSCL.z from xfctx
+	// directly can yield a stale/unset value for early draws, collapsing all depth
+	// to ~0 (or the wrong range for float formats) and losing depth ordering.
+	//
+	// For float Z (z_format=1 / W-buffer): the XVS uses VPSCL.z = f24_max (the max
+	// representable F24 value).  Dividing by f24_max recovers ndc_z ∈ [0,1] just
+	// like for integer formats.  The depth comparison stays LESS_EQUAL — xemu
+	// normalises both modes to [0,1] and uses the same comparison for both.
+	float zOutputScale = 16777215.0f;
 	{
 		auto pg_z = &(g_NV2A->GetDeviceState()->pgraph);
-		float vpscl_z;
-		std::memcpy(&vpscl_z, &pg_z->xf.xfctx[NV_IGRAPH_XF_XFCTX_VPSCL][2], sizeof(float));
-		if (vpscl_z != 0.0f) {
-			zOutputScale = vpscl_z;
+		auto surf = NV2AGetSurfaceState(pg_z);
+		bool z_format = (pg_z->regs[RI(NV_PGRAPH_SETUPRASTER)] & NV_PGRAPH_SETUPRASTER_Z_FORMAT) != 0;
+
+		if (z_format) {
+			// Float depth (F24S8 / W-buffer): XVS viewport scale = max F24 value.
+			// F24 max as F32 bits: sign=0, exp=0xFE (254), mant = 0x7FFF << 8 → 0x7F7FFF00.
+			static const uint32_t kF24MaxBits = 0x7F7FFF00u;
+			float f24Max;
+			std::memcpy(&f24Max, &kF24MaxBits, sizeof(float));
+			zOutputScale = (surf.zetaFormat == NV097_SET_SURFACE_FORMAT_ZETA_Z16)
+				? 65535.0f : f24Max;
 		} else {
-			// Fallback: use format-derived default if VPSCL not yet programmed
-			auto surf = NV2AGetSurfaceState(pg_z);
-			switch (surf.zetaFormat) {
-				case NV097_SET_SURFACE_FORMAT_ZETA_Z16:   zOutputScale = 65535.0f;    break;
-				case NV097_SET_SURFACE_FORMAT_ZETA_Z24S8: zOutputScale = 16777215.0f; break;
-				default:                                  zOutputScale = 65535.0f;    break;
-			}
+			// Fixed-point integer depth: scale = full integer range of the format.
+			zOutputScale = (surf.zetaFormat == NV097_SET_SURFACE_FORMAT_ZETA_Z16)
+				? 65535.0f : 16777215.0f;
 		}
 	}
 
@@ -741,19 +749,22 @@ static void UpdateFFState_Transforms(PGRAPHState* pg, uint32_t skinMode)
 		// pre-scale the Z column to avoid a float32 precision loss (Z-fighting) described below.
 		auto surf = NV2AGetSurfaceState(pg);
 
-		// Depth max (zmax) for Z normalization — read from NV2A viewport scale Z (VPSCL.z).
-		// The viewport transform bakes VPSCL.z into CMAT's Z column, so we must reverse it.
+		// Depth max (zmax) — use the format-based value, matching xemu's approach.
+		// CMAT's Z column is scaled by VPSCL.z = zmax; pre-dividing by the same zmax
+		// recovers clip_z directly.  Using the format-derived constant ensures correct
+		// depth normalisation regardless of VPSCL.z timing in the push buffer.
 		{
-			float vpscl_z;
-			std::memcpy(&vpscl_z, &pg->xf.xfctx[NV_IGRAPH_XF_XFCTX_VPSCL][2], sizeof(float));
-			if (vpscl_z > 0.0f) {
-				ffShaderState.Modes.DepthMax = vpscl_z;
+			bool z_format = (pg->regs[RI(NV_PGRAPH_SETUPRASTER)] & NV_PGRAPH_SETUPRASTER_Z_FORMAT) != 0;
+			if (z_format) {
+				// Float depth (F24S8 / W-buffer): viewport Z scale = max F24 value.
+				static const uint32_t kF24MaxBits = 0x7F7FFF00u;
+				float f24Max;
+				std::memcpy(&f24Max, &kF24MaxBits, sizeof(float));
+				ffShaderState.Modes.DepthMax = (surf.zetaFormat == NV097_SET_SURFACE_FORMAT_ZETA_Z16)
+					? 65535.0f : f24Max;
 			} else {
-				// Fallback: format-based default if VPSCL not yet programmed
-				switch (surf.zetaFormat) {
-					case NV097_SET_SURFACE_FORMAT_ZETA_Z16:   ffShaderState.Modes.DepthMax = 65535.0f;    break;
-					default:                                  ffShaderState.Modes.DepthMax = 16777215.0f; break;
-				}
+				ffShaderState.Modes.DepthMax = (surf.zetaFormat == NV097_SET_SURFACE_FORMAT_ZETA_Z16)
+					? 65535.0f : 16777215.0f;
 			}
 		}
 

@@ -239,27 +239,10 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 				? D3D11_DEPTH_WRITE_MASK_ALL : D3D11_DEPTH_WRITE_MASK_ZERO;
 
 			unsigned int zfunc = GET_MASK(ctrl0, NV_PGRAPH_CONTROL_0_ZFUNC);
-			// W-buffer mode (Z_PERSPECTIVE_ENABLE=1): the depth buffer stores 1/clip_w
-			// (rhw).  Larger values are nearer, opposite to Z-buffer convention.
-			// Invert LESS↔GREATER and LEQUAL↔GEQUAL so D3D11 correctly rejects far
-			// fragments that arrive after near ones have already been written.
-			// NEVER/EQUAL/NOT_EQUAL/ALWAYS are symmetric under inversion and unchanged.
-			if (ctrl0 & NV_PGRAPH_CONTROL_0_Z_PERSPECTIVE_ENABLE) {
-				static const D3D11_COMPARISON_FUNC kWBufInvert[8] = {
-					D3D11_COMPARISON_NEVER,         // 0 NEVER   → NEVER
-					D3D11_COMPARISON_GREATER,       // 1 LESS    → GREATER
-					D3D11_COMPARISON_EQUAL,         // 2 EQUAL   → EQUAL
-					D3D11_COMPARISON_GREATER_EQUAL, // 3 LEQUAL  → GEQUAL
-					D3D11_COMPARISON_LESS,          // 4 GREATER → LESS
-					D3D11_COMPARISON_NOT_EQUAL,     // 5 NOTEQUAL→ NOT_EQUAL
-					D3D11_COMPARISON_LESS_EQUAL,    // 6 GEQUAL  → LEQUAL
-					D3D11_COMPARISON_ALWAYS,        // 7 ALWAYS  → ALWAYS
-				};
-				g_D3D11DepthStencilDesc.DepthFunc = (zfunc < 8) ? kWBufInvert[zfunc]
-				                                                  : D3D11_COMPARISON_ALWAYS;
-			} else {
-				g_D3D11DepthStencilDesc.DepthFunc = (D3D11_COMPARISON_FUNC)(zfunc + 1);
-			}
+			// Z_PERSPECTIVE_ENABLE (W-buffer) does NOT change the comparison direction:
+			// xemu normalises both Z-buffer and W-buffer depth to ndc_z ∈ [0,1] by
+			// dividing by the format-based zmax, so LESS_EQUAL is correct in both cases.
+			g_D3D11DepthStencilDesc.DepthFunc = (D3D11_COMPARISON_FUNC)(zfunc + 1);
 
 			g_D3D11DepthStencilDesc.StencilEnable = (ctrl1 & NV_PGRAPH_CONTROL_1_STENCIL_TEST_ENABLE) ? TRUE : FALSE;
 
@@ -364,17 +347,13 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 			// Line antialiasing
 			g_D3D11RasterizerDesc.AntialiasedLineEnable = (setup & NV_PGRAPH_SETUPRASTER_LINESMOOTHENABLE) ? TRUE : FALSE;
 
-			// Depth clip vs clamp — NV097_SET_ZMIN_MAX_CONTROL ZCLAMP_EN field.
-			// CULL  (0) = fragments outside [0,1] depth are discarded → D3D11 DepthClipEnable = TRUE
-			// CLAMP (1) = fragments outside [0,1] depth are clamped   → D3D11 DepthClipEnable = FALSE
-			// NV2A hardware reset default is CULL (0), but Cxbx used FALSE unconditionally before.
-			// Using the actual hardware value makes depth clipping hardware-accurate while still
-			// allowing games that explicitly request CLAMP to get clamped behaviour.
-			{
-				uint32_t zclamp_en = GET_MASK(zCompOcclude, NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN);
-				g_D3D11RasterizerDesc.DepthClipEnable =
-					(zclamp_en == NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN_CLAMP) ? FALSE : TRUE;
-			}
+			// Depth clip vs clamp: Xbox D3D runtime always programs ZCLAMP_EN=CLAMP so
+			// geometry slightly outside [0,1] depth is clamped to the near/far plane
+			// rather than discarded.  The NV2A hardware reset state is CULL (0), but
+			// using TRUE (clip) before the game's init code sets CLAMP causes near-plane
+			// geometry to be discarded, letting far objects show through — "far objects
+			// in front".  Always use FALSE (clamp) for Xbox-compatible behaviour.
+			g_D3D11RasterizerDesc.DepthClipEnable = FALSE;
 
 			// Depth bias
 			float zBias; std::memcpy(&zBias, &zBiasReg, sizeof(float));
