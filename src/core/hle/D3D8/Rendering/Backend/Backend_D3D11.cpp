@@ -65,7 +65,7 @@ D3D11_RASTERIZER_DESC    g_D3D11RasterizerDesc = {
 D3D11_DEPTH_STENCIL_DESC g_D3D11DepthStencilDesc = {
 	/* DepthEnable           */ TRUE,
 	/* DepthWriteMask        */ D3D11_DEPTH_WRITE_MASK_ALL,
-	/* DepthFunc             */ D3D11_COMPARISON_LESS,
+	/* DepthFunc             */ D3D11_COMPARISON_LESS_EQUAL, // NV2A reset default is LEQUAL
 	/* StencilEnable         */ FALSE,
 	/* StencilReadMask       */ D3D11_DEFAULT_STENCIL_READ_MASK,
 	/* StencilWriteMask      */ D3D11_DEFAULT_STENCIL_WRITE_MASK,

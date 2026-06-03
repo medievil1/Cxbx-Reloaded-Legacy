@@ -405,8 +405,12 @@ VS_OUTPUT main(const VS_INPUT xInput)
     // 2. Add viewport offset (half-pixel bias from NV2A XFCTX)
     // 3. Convert screen coords to NDC: (2*pos - surfaceSize) / surfaceSize
     // 4. Multiply by w to produce clip-space (D3D11 will perspective-divide)
-    // 5. Normalize Z by dividing by zmax (depth range)
-    // CPU guarantees SurfaceWidth, SurfaceHeight >= 1 and DepthMax > 0
+    // Z is already clip_z: the CPU pre-scales the CMAT Z column by 1/DepthMax before
+    // upload (HostRender.cpp UpdateFFState_Transforms), so mul(pos, CMAT).z = clip_z
+    // directly — avoiding the large float32 intermediate clip_z * depthMax that would
+    // otherwise lose precision and produce Z-fighting near the far plane.
+    // D3D11 then divides clip_z by clip_w to obtain ndc_z in [0,1] for depth writing.
+    // CPU guarantees SurfaceWidth, SurfaceHeight >= 1.
     float2 surfaceSize = float2(state.Modes.SurfaceWidth, state.Modes.SurfaceHeight);
     float w = screenPos.w;
     float invW = (abs(w) > 1e-30f) ? (1.0f / w) : 0.0f;
@@ -415,8 +419,7 @@ VS_OUTPUT main(const VS_INPUT xInput)
     xy.x = (2.0f * xy.x - surfaceSize.x) / surfaceSize.x;  // screen → NDC (X)
     xy.y = (surfaceSize.y - 2.0f * xy.y) / surfaceSize.y;  // screen → NDC (Y flipped for D3D11)
     screenPos.xy = xy * w;                                 // back to clip-space
-    // Z: CMAT produces Z scaled by zmax; divide to normalize to [0,1] for D3D11 depth
-    screenPos.z /= state.Modes.DepthMax;
+    // screenPos.z is already clip_z (CMAT Z column pre-scaled by CPU, no divide needed)
     Projection.Position = screenPos;
     // Normal unused...
 

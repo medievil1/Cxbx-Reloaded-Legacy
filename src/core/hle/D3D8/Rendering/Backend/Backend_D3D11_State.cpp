@@ -149,6 +149,7 @@ static uint32_t s_CachedControl3Reg = ~0u;
 static uint32_t s_CachedSetupRasterReg = ~0u;
 static uint32_t s_CachedZOffsetBiasReg = ~0u;
 static uint32_t s_CachedZOffsetFactorReg = ~0u;
+static uint32_t s_CachedZCompressOccludeReg = ~0u;
 void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 {
 	if (!pg) return;
@@ -287,9 +288,11 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 
 	// ---- Rasterizer state from NV_PGRAPH_SETUPRASTER (0x1990) ----
 	{
-		uint32_t setup = pg->regs[RI(NV_PGRAPH_SETUPRASTER)];
-		uint32_t zBiasReg = pg->regs[RI(NV_PGRAPH_ZOFFSETBIAS)];
+		uint32_t setup      = pg->regs[RI(NV_PGRAPH_SETUPRASTER)];
+		uint32_t zBiasReg   = pg->regs[RI(NV_PGRAPH_ZOFFSETBIAS)];
 		uint32_t zFactorReg = pg->regs[RI(NV_PGRAPH_ZOFFSETFACTOR)];
+		uint32_t zCompOcclude = pg->regs[RI(NV_PGRAPH_ZCOMPRESSOCCLUDE)];
+
 		// ---- Point sprite enable from NV_PGRAPH_SETUPRASTER ----
 		// D3DRS_POINTSPRITEENABLE → NV097_SET_POINT_SMOOTH_ENABLE →
 		// NV_PGRAPH_SETUPRASTER_POINTSMOOTHENABLE. This is distinct from
@@ -299,10 +302,12 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 		if (s_CachedSetupRasterReg != setup ||
 			s_CachedZOffsetBiasReg != zBiasReg ||
 			s_CachedZOffsetFactorReg != zFactorReg ||
+			s_CachedZCompressOccludeReg != zCompOcclude ||
 			g_bPointSpriteEnabled != bPointSpriteEnabled) {
 			s_CachedSetupRasterReg = setup;
 			s_CachedZOffsetBiasReg = zBiasReg;
 			s_CachedZOffsetFactorReg = zFactorReg;
+			s_CachedZCompressOccludeReg = zCompOcclude;
 			g_bPointSpriteEnabled = bPointSpriteEnabled;
 
 			// Fill mode: PGRAPH FRONTFACEMODE 0=FILL, 1=POINT, 2=LINE
@@ -339,10 +344,31 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 			// Line antialiasing
 			g_D3D11RasterizerDesc.AntialiasedLineEnable = (setup & NV_PGRAPH_SETUPRASTER_LINESMOOTHENABLE) ? TRUE : FALSE;
 
+			// Depth clip vs clamp — NV097_SET_ZMIN_MAX_CONTROL ZCLAMP_EN field.
+			// CULL  (0) = fragments outside [0,1] depth are discarded → D3D11 DepthClipEnable = TRUE
+			// CLAMP (1) = fragments outside [0,1] depth are clamped   → D3D11 DepthClipEnable = FALSE
+			// NV2A hardware reset default is CULL (0), but Cxbx used FALSE unconditionally before.
+			// Using the actual hardware value makes depth clipping hardware-accurate while still
+			// allowing games that explicitly request CLAMP to get clamped behaviour.
+			{
+				uint32_t zclamp_en = GET_MASK(zCompOcclude, NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN);
+				g_D3D11RasterizerDesc.DepthClipEnable =
+					(zclamp_en == NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN_CLAMP) ? FALSE : TRUE;
+			}
+
 			// Depth bias
 			float zBias; std::memcpy(&zBias, &zBiasReg, sizeof(float));
 			float zFactor; std::memcpy(&zFactor, &zFactorReg, sizeof(float));
-			g_D3D11RasterizerDesc.DepthBias = static_cast<INT>(zBias * (float)(1 << 24));
+			// D3D11 DepthBias integer unit = r = 1/2^N for an N-bit UNORM depth buffer.
+			// NV2A ZOFFSETBIAS is a float representing a multiple of the minimum depth unit,
+			// matching that format's 1/zMax step. Scale by the correct 2^N to keep the bias
+			// magnitude identical between the host and NV2A hardware.
+			{
+				auto depthSurf = NV2AGetSurfaceState(pg);
+				INT biasScale = (depthSurf.zetaFormat == NV097_SET_SURFACE_FORMAT_ZETA_Z16)
+					? (1 << 16) : (1 << 24);
+				g_D3D11RasterizerDesc.DepthBias = static_cast<INT>(zBias * (float)biasScale);
+			}
 			g_D3D11RasterizerDesc.SlopeScaledDepthBias = zFactor;
 			g_D3D11RasterizerDesc.DepthBiasClamp = 0.0f;
 
@@ -1049,10 +1075,18 @@ void CxbxD3D11UpdateRenderTargetFromPGRAPH(PGRAPHState *pg)
 
 	}
 
-	// Depth/stencil target (rebind if offset or format changed)
+	// Depth/stencil target (rebind if offset, format, pitch, or dimensions changed).
+	// Dimensions must be checked explicitly because the DS at a given offset may have
+	// been created for a different-sized color RT (e.g. a 512×512 shadow map DS later
+	// restored as the main-pass DS alongside a 640×480 RT).  D3D11 requires exact
+	// RT/DS dimension matching; a cached DS at the right offset but wrong size causes
+	// D3D11 to silently unbind both targets.  Checking clipWidth/clipHeight catches
+	// the save/restore pattern used by GetDepthStencilSurface2 / SetRenderTarget.
 	bool zetaChanged = (zetaOffset != prevZetaOffset) ||
 		(surf.zetaFormat != g_LastBoundSurfaceState.zetaFormat) ||
-		(surf.zetaPitch != g_LastBoundSurfaceState.zetaPitch);
+		(surf.zetaPitch  != g_LastBoundSurfaceState.zetaPitch)  ||
+		(surf.clipWidth  != g_LastBoundSurfaceState.clipWidth)  ||
+		(surf.clipHeight != g_LastBoundSurfaceState.clipHeight);
 	if (zetaChanged) {
 		if (zetaOffset != 0) {
 			ID3D11Texture2D *pHostDS = nullptr;
@@ -1311,5 +1345,200 @@ void CxbxSetViewport(D3D11_VIEWPORT *pHostViewport)
 void CxbxSetScissorRect(CONST RECT *pHostViewportRect)
 {
 	g_pD3DDeviceContext->RSSetScissorRects(1, pHostViewportRect);
+}
+
+// ******************************************************************
+// * CxbxSyncVramToD3D11RT
+// *
+// * After NV_IMAGE_BLIT (D3DDevice::CopyRects / UpdateSurface) writes pixel data
+// * to Xbox VRAM via CPU memmove, the corresponding D3D11 RT in the resource cache
+// * does not reflect those changes.  This function uploads the Xbox VRAM contents
+// * for the given display surface directly into the D3D11 RT using UpdateSubresource,
+// * making the 2D-blitted content visible when D3D11_flip_stall presents the frame.
+// *
+// * Caller guarantees:
+// *  - D3D11 context lock is held (called from D3D11_flip_stall).
+// *  - pRT was returned by CxbxLookupPgraphRTByOffset(pcrtc.start).
+// *  - d->vram_ptr + physAddr is readable CPU memory.
+// ******************************************************************
+void CxbxSyncVramToD3D11RT(NV2AState* d, ID3D11Texture2D* pRT, uint32_t physAddr)
+{
+	if (!d || !pRT || !d->vram_ptr || physAddr == 0)
+		return;
+
+	// Get D3D11 RT dimensions (host-side, possibly upscaled).
+	D3D11_TEXTURE2D_DESC rtDesc = {};
+	pRT->GetDesc(&rtDesc);
+
+	if (rtDesc.Usage != D3D11_USAGE_DEFAULT
+		|| !(rtDesc.BindFlags & D3D11_BIND_RENDER_TARGET))
+		return; // Only colour RTs
+
+	// Derive Xbox-side (logical) surface dimensions and pitch from PGRAPH state.
+	auto surf = NV2AGetSurfaceState(d);
+
+	UINT xboxPitch = surf.colorPitch; // bytes per row in Xbox VRAM
+	if (xboxPitch == 0)
+		return; // Surface not set up yet
+
+	// Bytes-per-pixel from the D3D11 RT format (host format matches Xbox colour format).
+	UINT bpp = 4; // default: B8G8R8A8
+	switch (rtDesc.Format) {
+	case DXGI_FORMAT_B5G6R5_UNORM:
+	case DXGI_FORMAT_B5G5R5A1_UNORM:
+		bpp = 2; break;
+	case DXGI_FORMAT_R8_UNORM:
+		bpp = 1; break;
+	case DXGI_FORMAT_R8G8_UNORM:
+		bpp = 2; break;
+	default:
+		bpp = 4; break;
+	}
+
+	// Xbox logical width from pitch and bpp.
+	UINT xboxWidth  = xboxPitch / bpp;
+	UINT xboxHeight = surf.clipHeight > 0 ? surf.clipHeight : (rtDesc.Height / g_RenderUpscaleFactor);
+	if (xboxWidth == 0 || xboxHeight == 0)
+		return;
+
+	const uint8_t* pSrcData = d->vram_ptr + physAddr;
+
+	UINT upscale = (g_RenderUpscaleFactor > 0) ? (UINT)g_RenderUpscaleFactor : 1;
+
+	if (upscale == 1) {
+		// Fast direct path: coordinates match 1:1 between Xbox VRAM and the D3D11 RT.
+		UINT uploadW = std::min(xboxWidth,  rtDesc.Width);
+		UINT uploadH = std::min(xboxHeight, rtDesc.Height);
+		D3D11_BOX box = { 0, 0, 0, uploadW, uploadH, 1 };
+		g_pD3DDeviceContext->UpdateSubresource(pRT, 0, &box, pSrcData, xboxPitch, 0);
+	} else {
+		// Upscaled RT: upload Xbox data to a temporary DYNAMIC texture at Xbox resolution
+		// then scale-blit it into the upscaled D3D11 RT via CxbxD3D11Blt.
+		D3D11_TEXTURE2D_DESC stagDesc = {};
+		stagDesc.Width            = xboxWidth;
+		stagDesc.Height           = xboxHeight;
+		stagDesc.MipLevels        = 1;
+		stagDesc.ArraySize        = 1;
+		stagDesc.Format           = rtDesc.Format;
+		stagDesc.SampleDesc.Count = 1;
+		stagDesc.Usage            = D3D11_USAGE_DYNAMIC;
+		stagDesc.BindFlags        = D3D11_BIND_SHADER_RESOURCE;
+		stagDesc.CPUAccessFlags   = D3D11_CPU_ACCESS_WRITE;
+
+		ID3D11Texture2D* pStaging = nullptr;
+		if (FAILED(g_pD3DDevice->CreateTexture2D(&stagDesc, nullptr, &pStaging)))
+			return;
+
+		D3D11_MAPPED_SUBRESOURCE mapped = {};
+		if (SUCCEEDED(g_pD3DDeviceContext->Map(pStaging, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped))) {
+			const uint8_t* pSrcRow = pSrcData;
+			uint8_t*       pDstRow = (uint8_t*)mapped.pData;
+			for (UINT row = 0; row < xboxHeight; row++) {
+				memcpy(pDstRow, pSrcRow, xboxWidth * bpp);
+				pSrcRow += xboxPitch;
+				pDstRow += mapped.RowPitch;
+			}
+			g_pD3DDeviceContext->Unmap(pStaging, 0);
+
+			// Scale-blit from staging (Xbox res) → RT (upscaled res).
+			RECT srcRect = { 0, 0, (LONG)xboxWidth, (LONG)xboxHeight };
+			RECT dstRect = { 0, 0, (LONG)rtDesc.Width, (LONG)rtDesc.Height };
+			CxbxD3D11Blt(pStaging, &srcRect, pRT, &dstRect, D3DTEXF_LINEAR);
+		}
+		pStaging->Release();
+	}
+
+	// Invalidate any cached SRV so the next draw samples the freshly uploaded data.
+	CxbxD3D11InvalidateCachedSRVForTexture(pRT);
+	extern void CxbxMarkTextureSRVsDirty();
+	CxbxMarkTextureSRVsDirty();
+	// Force the PGRAPH RT binding check on the next draw.
+	CxbxInvalidatePgraphRTBinding();
+}
+
+// ******************************************************************
+// * CxbxEnsurePcrtcSurfaceRT
+// *
+// * Called from D3D11_flip_stall when CxbxLookupPgraphRTByOffset(pcrtc.start)
+// * returns null — i.e., no 3D draw has yet registered a host surface at the
+// * display scan-out address.  This happens during the pre-3D phase: intro screens,
+// * loading screens, and FMV playback where the Xbox game renders only 2D content.
+// *
+// * Strategy:
+// *   1. Determine the display surface dimensions from PGRAPH clip state, then
+// *      PRAMDAC flat-panel display end registers, then the configured host BB size.
+// *   2. Derive the colour format from NV_PGRAPH_SURFACEFORMAT_COLOR.
+// *   3. Create a D3D11 RT via CreateHostSurfaceFromPGRAPH (reuses cached entry if
+// *      one already exists at this offset from a prior call).
+// *   4. Sync Xbox VRAM into the newly created RT immediately so any CPU-written
+// *      (NV_IMAGE_BLIT / CopyRects) content is visible in the current frame.
+// *   5. Promote the RT to g_pHostPgraphBackBuffer so subsequent flips can find it
+// *      via the fast fallback path without going through the RT cache.
+// *
+// * Returns the D3D11 surface to use for the flip blit, or nullptr on failure.
+// ******************************************************************
+ID3D11Texture2D* CxbxEnsurePcrtcSurfaceRT(NV2AState* d)
+{
+	if (!d || d->pcrtc.start == 0 || !g_pD3DDevice)
+		return nullptr;
+
+	// ---- 1.  Determine logical display dimensions ----
+	// Priority: PGRAPH clip rect → PRAMDAC FP display end → host presentation params.
+	auto surf = NV2AGetSurfaceState(d);
+	UINT w = surf.clipWidth;
+	UINT h = surf.clipHeight;
+
+	if (w == 0 || h == 0) {
+		// PRAMDAC flat-panel display end (true scanout resolution)
+		DWORD fp_h = d->pramdac.regs[RI(NV_PRAMDAC_FP_HDISPLAY_END)];
+		DWORD fp_v = d->pramdac.regs[RI(NV_PRAMDAC_FP_VDISPLAY_END)];
+		if (fp_h > 0) w = fp_h + 1;
+		if (fp_v > 0) h = fp_v + 1;
+	}
+
+	if (w == 0 || h == 0) {
+		// Last resort: use the configured host backbuffer size
+		w = g_EmuCDPD.HostPresentationParameters.BackBufferWidth;
+		h = g_EmuCDPD.HostPresentationParameters.BackBufferHeight;
+	}
+
+	if (w == 0 || h == 0)
+		return nullptr;
+
+	// ---- 2.  Determine colour format from PGRAPH ----
+	DXGI_FORMAT colorFmt = NV097ColorFormatToDXGI(surf.colorFormat);
+	// colorFormat == 0 means PGRAPH hasn't been initialised yet; default to B8G8R8A8
+	if (surf.colorFormat == 0)
+		colorFmt = DXGI_FORMAT_B8G8R8A8_UNORM;
+
+	// ---- 3.  Create / fetch D3D11 RT ----
+	ID3D11Texture2D* pRT = CreateHostSurfaceFromPGRAPH(d->pcrtc.start, colorFmt, w, h, false);
+	if (!pRT)
+		return nullptr;
+
+	// ---- 4.  Upload Xbox VRAM contents so 2D-blitted data is visible ----
+	// image_blit_dirty may not be set yet (the VRAM content could predate the
+	// dirty flag mechanism), so always sync on first RT creation.
+	CxbxSyncVramToD3D11RT(d, pRT, d->pcrtc.start);
+
+	// ---- 5.  Promote to g_pHostPgraphBackBuffer if dimensions match ----
+	if (g_PgraphBackBufferOffset == 0) {
+		if (w == g_EmuCDPD.HostPresentationParameters.BackBufferWidth &&
+			(h == g_EmuCDPD.HostPresentationParameters.BackBufferHeight ||
+			 h * 2 == g_EmuCDPD.HostPresentationParameters.BackBufferHeight)) {
+			g_PgraphBackBufferOffset = d->pcrtc.start;
+		}
+	}
+	if (d->pcrtc.start == g_PgraphBackBufferOffset) {
+		g_pHostPgraphBackBuffer   = pRT;
+		g_PgraphBackBufferWidth   = w * g_RenderUpscaleFactor;
+		g_PgraphBackBufferHeight  = h * g_RenderUpscaleFactor;
+	}
+
+	EmuLog(LOG_LEVEL::DEBUG,
+		"CxbxEnsurePcrtcSurfaceRT: created pre-3D display RT at 0x%08X (%ux%u fmt=%u)",
+		d->pcrtc.start, w, h, colorFmt);
+
+	return pRT;
 }
 

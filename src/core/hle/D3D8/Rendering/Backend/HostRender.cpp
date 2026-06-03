@@ -307,7 +307,13 @@ static void InitializeDefaultPipelineState()
 	g_D3D11RasterizerDesc.DepthBias = 0;
 	g_D3D11RasterizerDesc.SlopeScaledDepthBias = 0.0f;
 	g_D3D11RasterizerDesc.DepthBiasClamp = 0.0f;
-	g_D3D11RasterizerDesc.DepthClipEnable = FALSE; // NV2A has no depth clipping, only depth testing
+	// DepthClipEnable default: use FALSE (depth clamp) as the startup default.
+	// CxbxD3D11UpdatePipelineStateFromPGRAPH reads NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN
+	// (set by NV097_SET_ZMIN_MAX_CONTROL) and overrides this every time rasterizer state
+	// is rebuilt.  NV2A hardware reset state is ZCLAMP_EN=CULL (depth clip), but starting
+	// with FALSE avoids geometry behind the camera being clipped before the game programs
+	// the register — matching the pre-NV2A-state behaviour.
+	g_D3D11RasterizerDesc.DepthClipEnable = FALSE;
 	g_D3D11RasterizerDesc.ScissorEnable = FALSE;
 	g_D3D11RasterizerDesc.MultisampleEnable = FALSE;
 	g_D3D11RasterizerDesc.AntialiasedLineEnable = FALSE;
@@ -731,16 +737,9 @@ static void UpdateFFState_Transforms(PGRAPHState* pg, uint32_t skinMode)
 		//   4. clipPos.xy = (2 * screenPos.xy - surfaceSize) / surfaceSize * w  (screen→NDC)
 		//   5. clipPos.z = screenPos.z / clipRange  (depth normalization)
 		// D3D11 viewport is set to full surface size by CxbxD3D11UpdateViewportFromPGRAPH().
-		std::memcpy(&ffShaderState.Transforms.Projection, &cmat, sizeof(cmat));
-		ffShaderState.Modes.UseDirectComposite = (skinMode == NV_PGRAPH_CSV0_D_SKIN_OFF) ? 1 : 0;
-
-		// Pass surface size and viewport offset to shader for screen→NDC conversion.
-		// Guarantee >= 1 so the shader can unconditionally divide by these.
+		// Surface state and DepthMax must be resolved before uploading CMAT because we
+		// pre-scale the Z column to avoid a float32 precision loss (Z-fighting) described below.
 		auto surf = NV2AGetSurfaceState(pg);
-		ffShaderState.Modes.SurfaceWidth = std::max(1.0f, static_cast<float>(surf.clipWidth));
-		ffShaderState.Modes.SurfaceHeight = std::max(1.0f, static_cast<float>(surf.clipHeight));
-		ffShaderState.Modes.ViewportOffsetX = vpoff[0];
-		ffShaderState.Modes.ViewportOffsetY = vpoff[1];
 
 		// Depth max (zmax) for Z normalization — read from NV2A viewport scale Z (VPSCL.z).
 		// The viewport transform bakes VPSCL.z into CMAT's Z column, so we must reverse it.
@@ -757,6 +756,36 @@ static void UpdateFFState_Transforms(PGRAPHState* pg, uint32_t skinMode)
 				}
 			}
 		}
+
+		// Pre-scale the CMAT Z column by 1/DepthMax before uploading to the shader.
+		//
+		// NV2A CMAT includes the viewport Z scale (DepthMax), so mul(pos, CMAT) in the shader
+		// produces clip_z * DepthMax in the Z component. For D24S8 (DepthMax = 16777215) and a
+		// far-plane clip_z (e.g. 1000), the intermediate clip_z * DepthMax ≈ 1.68e10 exceeds
+		// float32's ~2^24 exact-integer range, causing adjacent depth levels to round to the
+		// same float32 value — manifesting as Z-fighting.
+		//
+		// Dividing the Z column of CMAT by DepthMax on the CPU (where the division is exact
+		// for the powers of two involved) makes the shader's matrix multiply produce clip_z
+		// directly, with values only as large as the view distance (no precision-destroying
+		// amplification). D3D11 then perspective-divides by clip_w to get ndc_z ∈ [0,1].
+		{
+			float depthMaxInv = (ffShaderState.Modes.DepthMax > 0.0f)
+				? (1.0f / ffShaderState.Modes.DepthMax) : 1.0f;
+			for (int row = 0; row < 4; row++) {
+				cmat.m[row][2] *= depthMaxInv;
+			}
+		}
+
+		std::memcpy(&ffShaderState.Transforms.Projection, &cmat, sizeof(cmat));
+		ffShaderState.Modes.UseDirectComposite = (skinMode == NV_PGRAPH_CSV0_D_SKIN_OFF) ? 1 : 0;
+
+		// Pass surface size and viewport offset to shader for screen→NDC conversion.
+		// Guarantee >= 1 so the shader can unconditionally divide by these.
+		ffShaderState.Modes.SurfaceWidth = std::max(1.0f, static_cast<float>(surf.clipWidth));
+		ffShaderState.Modes.SurfaceHeight = std::max(1.0f, static_cast<float>(surf.clipHeight));
+		ffShaderState.Modes.ViewportOffsetX = vpoff[0];
+		ffShaderState.Modes.ViewportOffsetY = vpoff[1];
 
 		// View matrix: PGRAPH XFCTX doesn't store View separately (only combined ModelView).
 		// Set View to identity — the WorldView matrices already include it.
