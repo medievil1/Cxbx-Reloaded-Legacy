@@ -757,23 +757,27 @@ static void UpdateFFState_Transforms(PGRAPHState* pg, uint32_t skinMode)
 			}
 		}
 
-		// Pre-scale the CMAT Z column by 1/DepthMax before uploading to the shader.
+		// Pre-scale the Z-output row of CMAT by 1/DepthMax before uploading to the shader.
 		//
-		// NV2A CMAT includes the viewport Z scale (DepthMax), so mul(pos, CMAT) in the shader
-		// produces clip_z * DepthMax in the Z component. For D24S8 (DepthMax = 16777215) and a
-		// far-plane clip_z (e.g. 1000), the intermediate clip_z * DepthMax ≈ 1.68e10 exceeds
-		// float32's ~2^24 exact-integer range, causing adjacent depth levels to round to the
-		// same float32 value — manifesting as Z-fighting.
+		// Matrix convention: the HLSL shader treats the uploaded float data as COLUMN-MAJOR,
+		// so each C++ row (m[i][*]) becomes HLSL column i.  Therefore:
+		//   mul(v, CMAT).z  =  dot(v, HLSL column 2)  =  dot(v, m[2][*])  =  dot(v, NV2A row 2)
 		//
-		// Dividing the Z column of CMAT by DepthMax on the CPU (where the division is exact
-		// for the powers of two involved) makes the shader's matrix multiply produce clip_z
-		// directly, with values only as large as the view distance (no precision-destroying
-		// amplification). D3D11 then perspective-divides by clip_w to get ndc_z ∈ [0,1].
+		// NV2A CMAT bakes the viewport Z scale (DepthMax) into NV2A row 2, so the dot
+		// product above yields clip_z * DepthMax. For D24S8 (DepthMax = 16777215) and a
+		// far-plane clip_z (e.g. 1000), clip_z * DepthMax ≈ 1.68e10 — well above float32's
+		// ~2^24 exact-integer limit — causing adjacent depth levels to round to the same
+		// float32 value and manifesting as Z-fighting.
+		//
+		// Scaling NV2A row 2 (C++ m[2][*]) by 1/DepthMax on the CPU makes the shader's
+		// matrix multiply produce clip_z directly (no large intermediate).  The shader
+		// then outputs clip_z as SV_Position.z; D3D11 perspective-divides by clip_w to
+		// obtain ndc_z ∈ [0,1] for the depth buffer — eliminating the precision loss.
 		{
 			float depthMaxInv = (ffShaderState.Modes.DepthMax > 0.0f)
 				? (1.0f / ffShaderState.Modes.DepthMax) : 1.0f;
-			for (int row = 0; row < 4; row++) {
-				cmat.m[row][2] *= depthMaxInv;
+			for (int col = 0; col < 4; col++) {
+				cmat.m[2][col] *= depthMaxInv;  // Scale NV2A row 2 (= HLSL column 2, column-major)
 			}
 		}
 
