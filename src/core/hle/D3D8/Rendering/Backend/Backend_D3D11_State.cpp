@@ -355,20 +355,27 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 			// in front".  Always use FALSE (clamp) for Xbox-compatible behaviour.
 			g_D3D11RasterizerDesc.DepthClipEnable = FALSE;
 
-			// Depth bias
-			float zBias; std::memcpy(&zBias, &zBiasReg, sizeof(float));
-			float zFactor; std::memcpy(&zFactor, &zFactorReg, sizeof(float));
-			// D3D11 DepthBias integer unit = r = 1/2^N for an N-bit UNORM depth buffer.
-			// NV2A ZOFFSETBIAS is a float representing a multiple of the minimum depth unit,
-			// matching that format's 1/zMax step. Scale by the correct 2^N to keep the bias
-			// magnitude identical between the host and NV2A hardware.
-			{
-				auto depthSurf = NV2AGetSurfaceState(pg);
-				INT biasScale = (depthSurf.zetaFormat == NV097_SET_SURFACE_FORMAT_ZETA_Z16)
-					? (1 << 16) : (1 << 24);
-				g_D3D11RasterizerDesc.DepthBias = static_cast<INT>(zBias * (float)biasScale);
+			// Depth bias - only apply when polygon offset fill is enabled
+			// (Xbox uses SOLIDOFFSETENABLE/D3DRS_SOLIDOFFSETENABLE to control this for shadow mapping)
+			bool offsetFillEnabled = (setup & NV_PGRAPH_SETUPRASTER_POFFSETFILLENABLE) != 0;
+			if (offsetFillEnabled) {
+				float zBias; std::memcpy(&zBias, &zBiasReg, sizeof(float));
+				float zFactor; std::memcpy(&zFactor, &zFactorReg, sizeof(float));
+				// D3D11 DepthBias integer unit = r = 1/2^N for an N-bit UNORM depth buffer.
+				// NV2A ZOFFSETBIAS is a float representing a multiple of the minimum depth unit,
+				// matching that format's 1/zMax step. Scale by the correct 2^N to keep the bias
+				// magnitude identical between the host and NV2A hardware.
+				{
+					auto depthSurf = NV2AGetSurfaceState(pg);
+					INT biasScale = (depthSurf.zetaFormat == NV097_SET_SURFACE_FORMAT_ZETA_Z16)
+						? (1 << 16) : (1 << 24);
+					g_D3D11RasterizerDesc.DepthBias = static_cast<INT>(zBias * (float)biasScale);
+				}
+				g_D3D11RasterizerDesc.SlopeScaledDepthBias = zFactor;
+			} else {
+				g_D3D11RasterizerDesc.DepthBias = 0;
+				g_D3D11RasterizerDesc.SlopeScaledDepthBias = 0.0f;
 			}
-			g_D3D11RasterizerDesc.SlopeScaledDepthBias = zFactor;
 			g_D3D11RasterizerDesc.DepthBiasClamp = 0.0f;
 
 			g_bD3D11RasterizerStateDirty = true;
