@@ -26,7 +26,7 @@
 #include "Backend_D3D11.h"
 #include "Backend_D3D11_Profiler.h"
 #include <algorithm> // std::min
-#include <intrin.h>  // _BitScanForward64
+#include <intrin.h>  // _BitScanForward
 
 // NV2A-native linear format check.  On NV2A, linear (pitch-based) textures
 // use format color codes with the LU_IMAGE or LC_IMAGE prefix.
@@ -772,25 +772,22 @@ void CxbxUpdateHostTextureScaling()
 void CxbxUpdateDirtyVertexShaderConstants(const float* constants, uint32_t* dirty) {
 	// Use bitmap for O(popcount) scan instead of iterating all 192 bools.
 	// Runs are carried across word boundaries to minimize SetConstantF calls.
-	// Optimized: process in 64-bit chunks to reduce loop overhead by 2x.
 	int batchStart = -1;
 	int batchEnd = -1; // last index in current run
 
-	for (int word = 0; word < 6; word += 2) {
-		// Process two 32-bit words as one 64-bit value for fewer iterations.
-		// We still handle word boundaries correctly for gap detection.
-		uint64_t bits64 = ((uint64_t)dirty[word + 1] << 32) | dirty[word];
-		if (!bits64) {
-			continue; // Skip empty pair
+	for (int word = 0; word < 6; word++) {
+		uint32_t bits = dirty[word];
+		if (!bits) {
+			continue;
 		}
 		dirty[word] = 0;
-		dirty[word + 1] = 0;
 
-		while (bits64) {
+		int base = word * 32;
+		while (bits) {
 			unsigned long bit_idx;
-			_BitScanForward64(&bit_idx, bits64);
-			int i = word * 32 + (int)bit_idx;
-			bits64 &= bits64 - 1; // Clear lowest set bit
+			_BitScanForward(&bit_idx, bits);
+			int i = base + (int)bit_idx;
+			bits &= bits - 1; // Clear lowest set bit
 
 			if (batchStart == -1) {
 				batchStart = i;
