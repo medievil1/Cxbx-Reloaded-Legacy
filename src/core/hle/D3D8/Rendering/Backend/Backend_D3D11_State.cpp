@@ -361,16 +361,14 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 			if (offsetFillEnabled) {
 				float zBias; std::memcpy(&zBias, &zBiasReg, sizeof(float));
 				float zFactor; std::memcpy(&zFactor, &zFactorReg, sizeof(float));
-				// D3D11 DepthBias integer unit = r = 1/2^N for an N-bit UNORM depth buffer.
-				// NV2A ZOFFSETBIAS is a float representing a multiple of the minimum depth unit,
-				// matching that format's 1/zMax step. Scale by the correct 2^N to keep the bias
-				// magnitude identical between the host and NV2A hardware.
-				{
-					auto depthSurf = NV2AGetSurfaceState(pg);
-					INT biasScale = (depthSurf.zetaFormat == NV097_SET_SURFACE_FORMAT_ZETA_Z16)
-						? (1 << 16) : (1 << 24);
-					g_D3D11RasterizerDesc.DepthBias = static_cast<INT>(zBias * (float)biasScale);
-				}
+				// D3D11 DepthBias: bias = DepthBias * 2^(-N) where N is depth bits.
+				// NV2A ZOFFSETBIAS is a float representing a multiple of the minimum depth unit.
+				// For D24S8: min depth = 1/16777215, so bias 4.0 → DepthBias ≈ 4.
+				// D3D11 internally multiplies by 1/16777216, so we need to round-trip match.
+				// The formula: bias_units = zBias * (zMax / 2^N) where zMax = 2^N - 1 for integer depth.
+				// This simplifies to: bias_units ≈ zBias * (1 - 1/2^N) * 2^N / 1 ≈ zBias.
+				// Use round-trip scaling to preserve exact magnitude.
+				g_D3D11RasterizerDesc.DepthBias = static_cast<INT>(roundf(zBias));
 				g_D3D11RasterizerDesc.SlopeScaledDepthBias = zFactor;
 			} else {
 				g_D3D11RasterizerDesc.DepthBias = 0;
