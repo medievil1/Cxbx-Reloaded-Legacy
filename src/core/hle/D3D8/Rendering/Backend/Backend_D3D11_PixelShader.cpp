@@ -279,11 +279,13 @@ void CxbxD3D11UploadRCInterpreterState()
 
 	// --- Build the auxiliary cbuffer (software-computed fields only) ---
 	// Skip rebuild if none of the relevant dirty groups changed.
-	// Aux CB reads only SHADER, TEXTURE, BLEND, and RASTERIZER registers.
+	// Aux CB reads SHADER, TEXTURE, BLEND, RASTERIZER registers, and xfctx
+	// (for viewport Z scale / DepthScale used in DOT_ZW operations).
 	{
 		static uint32_t s_LastAuxGeneration = ~0u;
 		uint32_t auxGen = pg->dirty[NV2A_DIRTY_SHADER] + pg->dirty[NV2A_DIRTY_TEXTURE]
-		                + pg->dirty[NV2A_DIRTY_BLEND] + pg->dirty[NV2A_DIRTY_RASTERIZER];
+		                + pg->dirty[NV2A_DIRTY_BLEND] + pg->dirty[NV2A_DIRTY_RASTERIZER]
+		                + pg->xf.xfctx_generation;
 		if (auxGen == s_LastAuxGeneration)
 			return; // Aux CB and regs SRV are still current
 		s_LastAuxGeneration = auxGen;
