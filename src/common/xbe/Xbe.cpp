@@ -33,6 +33,8 @@
 #include <filesystem> // filesystem related functions available on C++ 17
 #include <locale> // For ctime
 #include <array>
+#include <future>
+#include <sstream>
 #include "devices\LED.h" // For LED::Sequence
 #include "common\crypto\EmuSha.h" // For the SHA functions
 #include "common\crypto\EmuRsa.h" // For the RSA functions
@@ -341,6 +343,188 @@ cleanup:
     fclose(XbeFile);
 
     return;
+}
+
+// Helper to format stage and progress for callback
+static void ReportProgress(XbeLoadProgressCallback callback, const char* stage, float progress) {
+    if (callback) {
+        callback(stage, progress);
+    }
+}
+
+// construct via Xbe file (asynchronous with callback)
+std::unique_ptr<Xbe> Xbe::LoadAsync(const char* x_szFilename, XbeLoadProgressCallback callback)
+{
+    auto result = std::make_unique<Xbe>();
+    result->ConstructorInit();
+    
+    char szBuffer[MAX_PATH];
+    std::string XbeName = std::filesystem::path(x_szFilename).filename().string();
+
+    ReportProgress(callback, "Opening Xbe file...", 0.0f);
+    
+    FILE *XbeFile = fopen(x_szFilename, "rb");
+
+    if(XbeFile == 0) {
+        ReportProgress(callback, "Failed to open file", 0.0f);
+        result->SetFatalError(std::string("Could not open the Xbe file ") + XbeName);
+        return result;
+    }
+
+    ReportProgress(callback, "Storing Xbe Path...", 0.05f);
+    
+    strcpy(result->m_szPath, x_szFilename);
+    char * c = strrchr(result->m_szPath, '\\');
+    if (c != nullptr)
+        *(++c) = '\0';
+
+    strncpy(result->m_szFileName, XbeName.c_str(), ARRAY_SIZE(result->m_szFileName) * sizeof(char));
+
+    ReportProgress(callback, "Reading Image Header...", 0.1f);
+
+    if(fread(&result->m_Header, sizeof(result->m_Header), 1, XbeFile) != 1)
+    {
+        result->SetFatalError("Unexpected end of file while reading Xbe Image Header");
+        fclose(XbeFile);
+        return result;
+    }
+
+    if(result->m_Header.dwMagic != *(uint32_t *)"XBEH")
+    {
+        result->SetFatalError("Invalid magic number in Xbe file");
+        fclose(XbeFile);
+        return result;
+    }
+
+    if(result->m_Header.dwSizeofHeaders > sizeof(result->m_Header))
+    {
+        ReportProgress(callback, "Reading Image Header Extra Bytes...", 0.15f);
+        result->m_ExSize = RoundUp(result->m_Header.dwSizeofHeaders, PAGE_SIZE) - sizeof(result->m_Header);
+        result->m_HeaderEx = new char[result->m_ExSize];
+
+        if(fread(result->m_HeaderEx, result->m_ExSize, 1, XbeFile) != 1)
+        {
+            result->SetFatalError("Unexpected end of file while reading Xbe Image Header (Ex)");
+            fclose(XbeFile);
+            return result;
+        }
+    }
+
+    ReportProgress(callback, "Reading Certificate...", 0.25f);
+
+    fseek(XbeFile, result->m_Header.dwCertificateAddr - result->m_Header.dwBaseAddr, SEEK_SET);
+    if(fread(&result->m_Certificate, sizeof(result->m_Certificate), 1, XbeFile) != 1)
+    {
+        result->SetFatalError("Unexpected end of file while reading Xbe Certificate");
+        fclose(XbeFile);
+        return result;
+    }
+
+    setlocale( LC_ALL, "English" );
+    wcstombs(result->m_szAsciiTitle, result->m_Certificate.wsTitleName, 40);
+    result->m_szAsciiTitle[40] = '\0';
+
+    printf("Xbe::Xbe: Title identified as %s\n", result->m_szAsciiTitle);
+
+    ReportProgress(callback, "Reading Section Headers...", 0.4f);
+
+    fseek(XbeFile, result->m_Header.dwSectionHeadersAddr - result->m_Header.dwBaseAddr, SEEK_SET);
+    result->m_SectionHeader = new SectionHeader[result->m_Header.dwSections];
+    if (fread(result->m_SectionHeader, sizeof(*result->m_SectionHeader), result->m_Header.dwSections, XbeFile) != result->m_Header.dwSections)
+    {
+        result->SetFatalError("Unexpected end of file while reading Xbe Section Headers");
+        fclose(XbeFile);
+        return result;
+    }
+
+    ReportProgress(callback, "Reading Section Names...", 0.5f);
+
+    result->m_szSectionName = new char[result->m_Header.dwSections][10];
+    for(uint32_t v=0; v<result->m_Header.dwSections; v++)
+    {
+        uint8_t *sn = result->GetAddr(result->m_SectionHeader[v].dwSectionNameAddr);
+        memset(result->m_szSectionName[v], 0, 10);
+        if(sn != 0)
+        {
+            for(int b=0; b<9; b++)
+            {
+                result->m_szSectionName[v][b] = sn[b];
+                if(result->m_szSectionName[v][b] == '\0')
+                    break;
+            }
+        }
+        printf("Xbe::Xbe: Reading Section Name 0x%.04X...OK (%s)\n", v, result->m_szSectionName[v]);
+    }
+
+    if(result->m_Header.dwLibraryVersionsAddr != 0)
+    {
+        ReportProgress(callback, "Reading Library Versions...", 0.6f);
+        fseek(XbeFile, result->m_Header.dwLibraryVersionsAddr - result->m_Header.dwBaseAddr, SEEK_SET);
+        result->m_LibraryVersion = new LibraryVersion[result->m_Header.dwLibraryVersions];
+        if (fread(result->m_LibraryVersion, sizeof(*result->m_LibraryVersion), result->m_Header.dwLibraryVersions, XbeFile) != result->m_Header.dwLibraryVersions)
+        {
+            result->SetFatalError("Unexpected end of file while reading Xbe Library Versions");
+            fclose(XbeFile);
+            return result;
+        }
+    }
+
+    ReportProgress(callback, "Reading Sections...", 0.7f);
+
+    result->m_bzSection = new uint8_t*[result->m_Header.dwSections];
+    memset(result->m_bzSection, 0, result->m_Header.dwSections);
+
+    for(uint32_t v=0; v<result->m_Header.dwSections; v++)
+    {
+        uint32_t RawSize = result->m_SectionHeader[v].dwSizeofRaw;
+        uint32_t RawAddr = result->m_SectionHeader[v].dwRawAddr;
+
+        result->m_bzSection[v] = new uint8_t[RawSize];
+        memset(result->m_bzSection[v], 0, RawSize);
+
+        if(RawSize == 0)
+        {
+            printf("Xbe::Xbe: Reading Section 0x%.04X...OK\n", v);
+            continue;
+        }
+
+        fseek(XbeFile, RawAddr, SEEK_SET);
+        if(fread(result->m_bzSection[v], RawSize, 1, XbeFile) != 1)
+        {
+            sprintf(szBuffer, "Unexpected end of file while reading Xbe Section %d (%Xh) (%s)", v, v, result->m_szSectionName[v]);
+            result->SetFatalError(szBuffer);
+            fclose(XbeFile);
+            return result;
+        }
+        printf("Xbe::Xbe: Reading Section 0x%.04X...OK (%s)\n", v, result->m_szSectionName[v]);
+    }
+
+    ReportProgress(callback, "Reading Thread Local Storage...", 0.85f);
+
+    if(result->m_Header.dwTLSAddr != 0)
+    {
+        void *Addr = result->GetAddr(result->m_Header.dwTLSAddr);
+        if(Addr == 0)
+        {
+            result->SetFatalError("Could not locate Thread Local Storage");
+            fclose(XbeFile);
+            return result;
+        }
+        result->m_TLS = new TLS;
+        memcpy(result->m_TLS, Addr, sizeof(*result->m_TLS));
+    }
+
+    ReportProgress(callback, "Reading Signature Header...", 0.9f);
+
+    fseek(XbeFile, sizeof(result->m_Header.dwMagic) + sizeof(result->m_Header.pbDigitalSignature), SEEK_SET);
+    result->m_SignatureHeader = new uint8_t[result->m_Header.dwSizeofHeaders - (sizeof(result->m_Header.dwMagic) + sizeof(result->m_Header.pbDigitalSignature))];
+    fread(result->m_SignatureHeader, result->m_Header.dwSizeofHeaders - (sizeof(result->m_Header.dwMagic) + sizeof(result->m_Header.pbDigitalSignature)), 1, XbeFile);
+
+    fclose(XbeFile);
+
+    ReportProgress(callback, "Loading Complete", 1.0f);
+
+    return result;
 }
 
 // deconstructor

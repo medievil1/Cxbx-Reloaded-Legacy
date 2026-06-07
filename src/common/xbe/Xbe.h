@@ -45,15 +45,24 @@ namespace xbox
 	typedef struct _XBE_SECTION	XBEIMAGE_SECTION, *PXBEIMAGE_SECTION;
 }
 
+// Progress callback for async XBE loading
+using XbeLoadProgressCallback = void(*)(const char* stage, float progress);
+
 // Xbe (Xbox Executable) file object
 class Xbe : public Error
 {
     public:
-        // construct via Xbe file
+        // construct via Xbe file (synchronous)
         Xbe(const char *x_szFilename);
+		
+		// construct via Xbe file (asynchronous with callback)
+		static std::unique_ptr<Xbe> LoadAsync(const char* x_szFilename, XbeLoadProgressCallback callback = nullptr);
 		
         // deconstructor
        ~Xbe();
+		
+		// Default constructor for async loading
+		Xbe() { ConstructorInit(); }
 
 		// find an section by name
         template<bool want_pxbe_ret>

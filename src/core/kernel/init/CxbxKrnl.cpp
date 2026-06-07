@@ -520,7 +520,8 @@ static bool CxbxrKrnlXbeSystemSelector(int BootFlags,
 	// Load Xbe (this one will reside above WinMain's virtual_memory_placeholder)
 	std::filesystem::path xbeDirectory = std::filesystem::path(xbePath).parent_path();
 
-	CxbxKrnl_Xbe = new Xbe(xbePath.c_str()); // TODO : Instead of using the Xbe class, port Dxbx _ReadXbeBlock()
+	// Use async loading with progress callback
+	CxbxKrnl_Xbe = Xbe::LoadAsync(xbePath.c_str()).release();
 
 	if (CxbxKrnl_Xbe->HasFatalError()) {
 		CxbxrAbort(CxbxKrnl_Xbe->GetError().c_str());

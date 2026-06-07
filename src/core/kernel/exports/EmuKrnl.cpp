@@ -182,7 +182,6 @@ bool AddWaitObject(xbox::PKTHREAD kThread, xbox::PLARGE_INTEGER Timeout)
 	// Use the built-in ktimer as a dummy wait object, so that KiUnwaitThreadAndLock can still work
 	xbox::KiTimerLock();
 	xbox::PKWAIT_BLOCK WaitBlock = &kThread->TimerWaitBlock;
-	kThread->WaitBlockList = WaitBlock;
 	xbox::KiSetupTimerWaitBlock(kThread, WaitBlock, WaitBlock);
 	xbox::PKTIMER Timer = &kThread->Timer;
 	if (Timeout && Timeout->QuadPart) {
@@ -197,6 +196,8 @@ bool AddWaitObject(xbox::PKTHREAD kThread, xbox::PLARGE_INTEGER Timeout)
 			return false;
 		}
 	}
+	// Set WaitBlockList and State UNDER THE LOCK to prevent race conditions
+	kThread->WaitBlockList = WaitBlock;
 	kThread->State = xbox::Waiting;
 	xbox::KiTimerUnlock();
 	return true;

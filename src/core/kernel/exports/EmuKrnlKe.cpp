@@ -520,12 +520,18 @@ void ExecuteDpcQueue(bool inline_dispatch)
 
 		EmuLog(LOG_LEVEL::DEBUG, "DpcQueue: dispatching DPC 0x%.8X routine 0x%.8X", pkdpc, pkdpc->DeferredRoutine);
 
-		// Call the Deferred Procedure  :
-		pkdpc->DeferredRoutine(
-			pkdpc,
-			pkdpc->DeferredContext,
-			pkdpc->SystemArgument1,
-			pkdpc->SystemArgument2);
+		// Call the Deferred Procedure :
+		// Check for NULL DeferredRoutine to prevent crash (pre-existing DPC without valid routine)
+		if (pkdpc->DeferredRoutine) {
+			pkdpc->DeferredRoutine(
+				pkdpc,
+				pkdpc->DeferredContext,
+				pkdpc->SystemArgument1,
+				pkdpc->SystemArgument2);
+		} else {
+			EmuLog(LOG_LEVEL::WARNING, "DpcQueue: DPC 0x%.8X has NULL DeferredRoutine (Context=0x%.8X, Arg1=0x%.8X, Arg2=0x%.8X), skipping", 
+				pkdpc, pkdpc->DeferredContext, pkdpc->SystemArgument1, pkdpc->SystemArgument2);
+		}
 
 		EnterCriticalSection(&(g_DpcData.Lock));
 		KeGetCurrentPrcb()->DpcRoutineActive = FALSE;
@@ -1434,6 +1440,12 @@ XBSYSAPI EXPORTNUM(119) xbox::boolean_xt NTAPI xbox::KeInsertQueueDpc
 		LOG_FUNC_ARG(SystemArgument2)
 		LOG_FUNC_END;
 
+	// Validate Dpc has a valid DeferredRoutine
+	if (!Dpc || !Dpc->DeferredRoutine) {
+		EmuLog(LOG_LEVEL::WARNING, "KeInsertQueueDpc: Invalid DPC (ptr=0x%.8X, routine=0x%.8X)", Dpc, Dpc ? Dpc->DeferredRoutine : 0);
+		RETURN(FALSE);
+	}
+
 	// For thread safety, enter the Dpc lock:
 	EnterCriticalSection(&(g_DpcData.Lock));
 
@@ -1875,6 +1887,23 @@ XBSYSAPI EXPORTNUM(135) xbox::boolean_xt NTAPI xbox::KeRemoveEntryDeviceQueue
 }
 
 
+static void ResetThreadWaitTimerLocked(xbox::PKTHREAD Thread)
+{
+	xbox::PKTIMER Timer = &Thread->Timer;
+
+	if (Timer->Header.Inserted) {
+		xbox::KxRemoveTreeTimer(Timer);
+	}
+
+	Timer->Header.SignalState = FALSE;
+	InitializeListHead(&Timer->Header.WaitListHead);
+
+	xbox::PKWAIT_BLOCK TimerWaitBlock = &Thread->TimerWaitBlock;
+	TimerWaitBlock->WaitListEntry.Flink = &Timer->Header.WaitListHead;
+	TimerWaitBlock->WaitListEntry.Blink = &Timer->Header.WaitListHead;
+	TimerWaitBlock->NextWaitBlock = xbox::zeroptr;
+}
+
 XBSYSAPI EXPORTNUM(136) xbox::PLIST_ENTRY NTAPI xbox::KeRemoveQueue
 (
 	IN PRKQUEUE Queue,
@@ -1902,10 +1931,12 @@ XBSYSAPI EXPORTNUM(136) xbox::PLIST_ENTRY NTAPI xbox::KeRemoveQueue
 		// Associate with new queue
 		InsertTailList(&Queue->ThreadListHead, &Thread->QueueListEntry);
 		Thread->Queue = Queue;
-	} else if (Thread->QueueListEntry.Blink->Flink == &Thread->QueueListEntry) {
+	}
+	else if (Thread->QueueListEntry.Blink->Flink == &Thread->QueueListEntry) {
 		// Re-entering the same queue — decrement CurrentCount (was bumped on wake)
 		Queue->CurrentCount--;
-	} else {
+	}
+	else {
 		// Stale association — queue was re-initialized at the same address.
 		// Re-associate the thread with this fresh queue.
 		InsertTailList(&Queue->ThreadListHead, &Thread->QueueListEntry);
@@ -1934,46 +1965,47 @@ XBSYSAPI EXPORTNUM(136) xbox::PLIST_ENTRY NTAPI xbox::KeRemoveQueue
 	WaitBlock.Object = Queue;
 	WaitBlock.WaitKey = (cshort_xt)X_STATUS_SUCCESS;
 	WaitBlock.WaitType = WaitAny;
+	WaitBlock.NextWaitBlock = &WaitBlock;
 
-	Thread->WaitBlockList = &WaitBlock;
 	Thread->WaitStatus = X_STATUS_SUCCESS;
 	Thread->Alertable = FALSE;
 	Thread->WaitMode = (char_xt)WaitMode;
 	Thread->WaitReason = 0;
 	Thread->WaitTime = KeTickCount;
-	Thread->State = Waiting;
 
-	// Set up a timer for non-infinite timeouts so KiTimerExpiration can wake us
-	if (Timeout != zeroptr) {
-		KiSetupTimerWaitBlock(Thread, &WaitBlock, &WaitBlock);
-	} else {
-		WaitBlock.NextWaitBlock = &WaitBlock; // circular, no timer
+	const bool HasTimeout = (Timeout != zeroptr);
+	if (HasTimeout) {
+		KiTimerLock();
+		ResetThreadWaitTimerLocked(Thread);
 	}
 
-	// Insert wait block into Queue's WaitListHead BEFORE starting the timer,
-	// to prevent a race where the timer DPC fires and KiUnlinkThread tries to
-	// RemoveEntryList on a WaitBlock not yet in any list.
 	KiWaitListLock();
 	InsertTailList(&Queue->Header.WaitListHead, &WaitBlock.WaitListEntry);
-	KiWaitListUnlock();
 
-	// Now start the timer (if timeout specified)
-	if (Timeout != zeroptr) {
-		KiTimerLock();
+	if (HasTimeout) {
+		KiSetupTimerWaitBlock(Thread, &WaitBlock, &WaitBlock);
+	}
+
+	Thread->WaitBlockList = &WaitBlock;
+	Thread->State = Waiting;
+
+	if (HasTimeout) {
 		PKTIMER Timer = &Thread->Timer;
 		if (KiInsertTreeTimer(Timer, *Timeout) == FALSE) {
-			// Timer already expired — remove the WaitBlock we just inserted
-			KiTimerUnlock();
-			KiWaitListLock();
-			RemoveEntryList(&WaitBlock.WaitListEntry);
-			KiWaitListUnlock();
-			Thread->WaitBlockList = zeroptr;
+			KiRemoveWaitBlocks(Thread);
 			Thread->State = Running;
+			KiWaitListUnlock();
+			KiTimerUnlock();
 			Queue->CurrentCount++;
 			KiUnlockDispatcherDatabase(orig_irql);
 			RETURN((PLIST_ENTRY)X_STATUS_TIMEOUT);
 		}
+
+		KiWaitListUnlock();
 		KiTimerUnlock();
+	}
+	else {
+		KiWaitListUnlock();
 	}
 
 	KiUnlockDispatcherDatabase(orig_irql);
@@ -2929,23 +2961,20 @@ XBSYSAPI EXPORTNUM(159) xbox::ntstatus_xt NTAPI xbox::KeWaitForSingleObject
 		KiLockDispatcherDatabase(&Thread->WaitIrql);
 	}
 
-	// Wait Loop
-	// This loop ends 
-	PLARGE_INTEGER OriginalTime = Timeout;
 	KWAIT_BLOCK StackWaitBlock;
 	PKWAIT_BLOCK WaitBlock = &StackWaitBlock;
 	ntstatus_xt WaitStatus;
+	const bool HasTimeout = (Timeout != nullptr);
+
 	do {
-		// Check if we need to let an APC run. This should immediately trigger APC interrupt via a call to UnlockDispatcherDatabase
 		if (Thread->ApcState.KernelApcPending && (Thread->WaitIrql < APC_LEVEL)) {
 			KiUnlockDispatcherDatabase(Thread->WaitIrql);
-		} else {
+		}
+		else {
 			PKMUTANT ObjectMutant = (PKMUTANT)Object;
 			Thread->WaitStatus = X_STATUS_SUCCESS;
 
 			if (ObjectMutant->Header.Type == MutantObject) {
-				// If the object is a mutant object and it has been acquired MINGLONG times, raise an exception
-				// If the mutant is signalled, we can satisfy the wait
 				if ((ObjectMutant->Header.SignalState > 0) || (Thread == ObjectMutant->OwnerThread)) {
 					if (ObjectMutant->Header.SignalState != MINLONG) {
 						KiWaitSatisfyMutant(ObjectMutant, Thread);
@@ -2959,142 +2988,120 @@ XBSYSAPI EXPORTNUM(159) xbox::ntstatus_xt NTAPI xbox::KeWaitForSingleObject
 				}
 			}
 			else if (ObjectMutant->Header.SignalState > 0) {
-				// Otherwise, if the signal state is > 0, we can still just satisfy the wait
 				KiWaitSatisfyOther(ObjectMutant);
 				WaitStatus = X_STATUS_SUCCESS;
 				goto NoWait;
 			}
 
-			// If we reached here, the wait could not be satisfied immediately, so we must setup a WaitBlock
-			Thread->WaitBlockList = WaitBlock;
 			WaitBlock->Object = Object;
 			WaitBlock->WaitKey = (cshort_xt)(X_STATUS_SUCCESS);
 			WaitBlock->WaitType = WaitAny;
 			WaitBlock->Thread = Thread;
+			WaitBlock->NextWaitBlock = WaitBlock;
 
 			TestForAlertPending(Alertable);
 
-			// Handle a Timeout if specified
-			if (Timeout != nullptr) {
-				// If the timeout is 0, do not wait
+			if (HasTimeout) {
 				if (!(Timeout->u.LowPart | Timeout->u.HighPart)) {
 					WaitStatus = (NTSTATUS)(STATUS_TIMEOUT);
 					goto NoWait;
 				}
 
-				// Setup the timer wait block linkage
-				KiSetupTimerWaitBlock(Thread, WaitBlock, WaitBlock);
-			}
-			else {
-				WaitBlock->NextWaitBlock = WaitBlock;
+				KiTimerLock();
+				ResetThreadWaitTimerLocked(Thread);
 			}
 
-			// If the current thread is processing a queue object, wake other treads using the same queue
 			PRKQUEUE Queue = (PRKQUEUE)Thread->Queue;
 			if (Queue != NULL) {
 				// TODO: KiActivateWaiterQueue(Queue);
 			}
 
-			// Set thread state and insert WaitBlock into the object's wait list
-			// BEFORE starting the timer, to prevent a race where the timer DPC fires
-			// and KiUnlinkThread tries to RemoveEntryList on a WaitBlock that hasn't
-			// been inserted into any list yet.
 			Thread->Alertable = Alertable;
 			Thread->WaitMode = WaitMode;
 			Thread->WaitReason = (UCHAR)WaitReason;
 			Thread->WaitTime = KeTickCount;
-			Thread->State = Waiting;
 
 			KiWaitListLock();
 			InsertTailList(&ObjectMutant->Header.WaitListHead, &WaitBlock->WaitListEntry);
-			KiWaitListUnlock();
 
-			// Now start the timer (if timeout specified)
-			if (Timeout != nullptr) {
-				KiTimerLock();
-				PKTIMER Timer = &Thread->Timer;
-				if (KiInsertTreeTimer(Timer, *Timeout) == FALSE) {
-					// Timeout already expired — remove the WaitBlock we just inserted
-					KiTimerUnlock();
-					KiWaitListLock();
-					KiRemoveWaitBlocks(Thread);
-					KiWaitListUnlock();
-					WaitStatus = (NTSTATUS)STATUS_TIMEOUT;
-					goto NoWait;
-				}
-				KiTimerUnlock();
+			if (HasTimeout) {
+				KiSetupTimerWaitBlock(Thread, WaitBlock, WaitBlock);
 			}
 
-			// TODO: Remove this after we have our own scheduler and the above is implemented
+			Thread->WaitBlockList = WaitBlock;
+			Thread->State = Waiting;
+
+			if (HasTimeout) {
+				PKTIMER Timer = &Thread->Timer;
+				if (KiInsertTreeTimer(Timer, *Timeout) == FALSE) {
+					KiRemoveWaitBlocks(Thread);
+					Thread->State = Running;
+					KiWaitListUnlock();
+					KiTimerUnlock();
+				 WaitStatus = (NTSTATUS)STATUS_TIMEOUT;
+					goto NoWait;
+				}
+
+				KiWaitListUnlock();
+				KiTimerUnlock();
+			}
+			else {
+				KiWaitListUnlock();
+			}
+
 			WaitStatus = WaitApc<false>([Object](PKTHREAD Thread) -> std::optional<ntstatus_xt> {
 				if (Thread->State == Ready) {
-					// We have been readied to resume execution, so exit the wait
 					return std::make_optional<ntstatus_xt>(Thread->WaitStatus);
 				}
-				// Re-check SignalState to handle the race where KeSetEvent fired
-				// between our initial SignalState check and the WaitBlock insertion.
-				// In that case KeSetEvent sees an empty WaitList, sets SignalState=1,
-				// and returns without waking anyone.  Without this re-check the
-				// thread would spin in WaitApc forever (missed-wakeup bug).
+
 				PKMUTANT ObjectMutant = (PKMUTANT)Object;
 				bool satisfiable;
 				if (ObjectMutant->Header.Type == MutantObject) {
 					satisfiable = (ObjectMutant->Header.SignalState > 0) || (Thread == ObjectMutant->OwnerThread);
-				} else {
+				}
+				else {
 					satisfiable = (ObjectMutant->Header.SignalState > 0);
 				}
+
 				if (satisfiable) {
 					KiWaitListLock();
-					// Double-check under lock
 					if (ObjectMutant->Header.Type == MutantObject) {
 						satisfiable = (ObjectMutant->Header.SignalState > 0) || (Thread == ObjectMutant->OwnerThread);
-					} else {
+					}
+					else {
 						satisfiable = (ObjectMutant->Header.SignalState > 0);
 					}
+
 					if (satisfiable) {
 						Thread->WaitStatus = X_STATUS_SUCCESS;
 						KiWaitSatisfyAny(ObjectMutant, Thread);
 						KiRemoveWaitBlocks(Thread);
-						// Mark thread as Ready BEFORE releasing KiWaitListLock
-						// to prevent KiUnwaitThread from a racing KiTimerExpiration
-						// from double-removing the already-removed WaitBlocks.
 						Thread->State = Ready;
 						KiWaitListUnlock();
 						KiCancelThreadTimer(Thread);
 						return std::make_optional<ntstatus_xt>(Thread->WaitStatus);
 					}
+
 					KiWaitListUnlock();
 				}
+
 				return std::nullopt;
-				}, Timeout, Alertable, WaitMode, Thread);
+			}, Timeout, Alertable, WaitMode, Thread);
 
 			break;
 		}
 
-		// Raise IRQL to DISPATCH_LEVEL and lock the database
 		if (KeGetCurrentIrql() != DISPATCH_LEVEL) {
 			KiLockDispatcherDatabase(&Thread->WaitIrql);
 		}
 	} while (TRUE);
 
-	// The waiting thead has been alerted, or an APC needs to be delivered
-	// So unlock the dispatcher database, lower the IRQ and return the status
 	Thread->State = Running;
 	KiUnlockDispatcherDatabase(Thread->WaitIrql);
-#if 0
-	// No need for this at the moment, since WaitApc already executes user APCs
-	if (WaitStatus == X_STATUS_USER_APC) {
-		KiExecuteUserApc();
-	}
-#endif
 
 	RETURN(WaitStatus);
 
 NoWait:
-	// The wait was satisfied without actually waiting
-	// Unlock the database and return the status
-	//TODO: KiAdjustQuantumThread(Thread);
-
 	Thread->State = Running;
 	KiUnlockDispatcherDatabase(Thread->WaitIrql);
 

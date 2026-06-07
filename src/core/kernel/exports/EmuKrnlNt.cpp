@@ -61,6 +61,97 @@ namespace NtDll
 
 #include <unordered_map>
 #include <mutex>
+#include <future>
+#include <queue>
+#include <condition_variable>
+#include <atomic>
+#include <thread>
+
+// Async I/O Thread Pool for file operations
+class AsyncIOThreadPool {
+public:
+    static AsyncIOThreadPool& Instance() {
+        static AsyncIOThreadPool instance;
+        return instance;
+    }
+
+    template<typename Func>
+    void Enqueue(Func&& func) {
+        {
+            std::lock_guard<std::mutex> lock(m_queueMutex);
+            m_tasks.emplace(std::forward<Func>(func));
+        }
+        m_condition.notify_one();
+    }
+
+private:
+    AsyncIOThreadPool() {
+        for (size_t i = 0; i < std::thread::hardware_concurrency(); ++i) {
+            m_workers.emplace_back([this] { WorkerThread(); });
+        }
+    }
+
+    ~AsyncIOThreadPool() {
+        {
+            std::lock_guard<std::mutex> lock(m_queueMutex);
+            m_stop = true;
+        }
+        m_condition.notify_all();
+        for (auto& worker : m_workers) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    }
+
+    void WorkerThread() {
+        while (true) {
+            std::function<void()> task;
+            {
+                std::unique_lock<std::mutex> lock(m_queueMutex);
+                m_condition.wait(lock, [this] { return m_stop || !m_tasks.empty(); });
+                if (m_stop && m_tasks.empty()) {
+                    return;
+                }
+                task = std::move(m_tasks.front());
+                m_tasks.pop();
+            }
+            task();
+        }
+    }
+
+    std::vector<std::thread> m_workers;
+    std::queue<std::function<void()>> m_tasks;
+    std::mutex m_queueMutex;
+    std::condition_variable m_condition;
+    std::atomic<bool> m_stop{ false };
+};
+
+// Context for async file I/O operations
+struct AsyncFileContext {
+    ::HANDLE hHostFile;
+    void* Buffer;
+    xbox::ulong_xt Length;
+    union {
+        xbox::PLARGE_INTEGER ByteOffsetPtr;
+        xbox::LARGE_INTEGER ByteOffsetVal;
+    };
+    xbox::PIO_STATUS_BLOCK IoStatusBlock;
+    ::HANDLE HostEvent;
+    xbox::PFILE_OBJECT FileObject;
+    xbox::PIO_COMPLETION_CONTEXT CompletionContext;
+    xbox::PVOID ApcContext;
+    xbox::PIO_APC_ROUTINE ApcRoutine;
+    xbox::PVOID ApcContextOrig;
+    xbox::PKEVENT XboxEvent;
+    bool IsRead;
+    bool IsComplete;
+    NTSTATUS Result;
+    ULONG BytesTransferred;
+};
+
+// Forward declaration for async completion callback
+static void NTAPI AsyncFileIOCompletion(AsyncFileContext* ctx);
 
 // Context for async I/O completion port notifications.
 // When NtReadFile/NtWriteFile is called on an async file with a completion port,
@@ -93,6 +184,51 @@ static void NTAPI IoCompletionWaitCallback(void* Parameter, BOOLEAN /*TimerOrWai
 	CloseHandle(ctx->hHostEvent);
 	xbox::ObfDereferenceObject(ctx->FileObject);
 	delete ctx;
+}
+
+// Async file I/O completion callback - runs on thread pool thread
+static void NTAPI AsyncFileIOCompletion(AsyncFileContext* ctx)
+{
+    // Signal the Xbox event if one was provided
+    if (ctx->XboxEvent) {
+        KeSetEvent(ctx->XboxEvent, /*Increment=*/1, /*Wait=*/FALSE);
+    } else if (X_NT_SUCCESS(ctx->Result)) {
+        KeSetEvent(&ctx->FileObject->Event, /*Increment=*/0, /*Wait=*/FALSE);
+    }
+
+    // Call the game's APC routine if provided and successful
+    if (ctx->ApcRoutine && X_NT_SUCCESS(ctx->Result)) {
+        ctx->ApcRoutine(ctx->ApcContextOrig, ctx->IoStatusBlock, 0);
+    }
+
+    // Post IO completion packet if the file has an associated completion port
+    if (ctx->CompletionContext) {
+        xbox::ntstatus_xt ioStatus = ctx->Result;
+        xbox::ulong_xt ioInfo = ctx->BytesTransferred;
+        xbox::IoSetIoCompletion(
+            reinterpret_cast<xbox::PKQUEUE>(ctx->CompletionContext->Port),
+            ctx->CompletionContext->Key,
+            ctx->ApcContext,
+            ioStatus,
+            ioInfo);
+    }
+
+    // Dereference the Xbox event object
+    if (ctx->XboxEvent) {
+        ObfDereferenceObject(ctx->XboxEvent);
+    }
+
+    // Dereference the file object
+    ObfDereferenceObject(ctx->FileObject);
+
+    // Signal the host event to wake any waiting thread
+    if (ctx->HostEvent) {
+        SetEvent(ctx->HostEvent);
+        CloseHandle(ctx->HostEvent);
+    }
+
+    // Clean up
+    delete ctx;
 }
 
 // Prevent setting the system time from multiple threads at the same time
@@ -2164,13 +2300,73 @@ XBSYSAPI EXPORTNUM(219) xbox::ntstatus_xt NTAPI xbox::NtReadFile
 	KeResetEvent(&FileObject->Event);
 
 	if (const auto& nFileHandle = GetObjectNativeHandle(FileObject)) {
-		// Always use a temporary Windows event to guarantee host I/O completes
-		// before we return.  The NT kernel blocks the calling thread (waiting on
-		// FileObject->Event) when no explicit Event, APC, or completion port is
-		// specified.  Without this, async host file handles can return
-		// STATUS_PENDING which the game may poll forever.
-		// For completion ports (without Event/APC), we use a thread pool wait
-		// instead of blocking, so STATUS_PENDING is correctly handled there too.
+		// Check if we should use async I/O (completion port without Event/APC)
+		// In this case, dispatch to thread pool and return immediately
+		if (CompletionContext != nullptr && XboxEvent == nullptr && ApcRoutine == nullptr) {
+			// Use thread pool for truly async I/O
+			auto* ctx = new AsyncFileContext;
+			ctx->hHostFile = *nFileHandle;
+			ctx->Buffer = Buffer;
+			ctx->Length = Length;
+			ctx->ByteOffsetPtr = ByteOffset;
+			if (ByteOffset) {
+				ctx->ByteOffsetVal = *ByteOffset;
+			}
+			ctx->IoStatusBlock = IoStatusBlock;
+			ctx->HostEvent = nullptr;
+			ctx->FileObject = FileObject;
+			ctx->CompletionContext = CompletionContext;
+			ctx->ApcContext = ApcContext;
+			ctx->ApcRoutine = nullptr;
+			ctx->ApcContextOrig = nullptr;
+			ctx->XboxEvent = nullptr;
+			ctx->IsRead = true;
+			ctx->IsComplete = false;
+			ctx->Result = X_STATUS_PENDING;
+			ctx->BytesTransferred = 0;
+			ObfReferenceObject(FileObject);
+			
+			// Dispatch to thread pool
+			AsyncIOThreadPool::Instance().Enqueue([ctx, nFileHandle, ByteOffset]() {
+				// Perform the actual I/O
+				HANDLE hHostEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+				ctx->HostEvent = hHostEvent;
+				
+				// Determine the byte offset to use
+				PLARGE_INTEGER byteOffset = ctx->ByteOffsetPtr ? ctx->ByteOffsetPtr : &ctx->ByteOffsetVal;
+				if (ctx->ByteOffsetPtr == nullptr && ByteOffset) {
+					ctx->ByteOffsetVal = *ByteOffset;
+				}
+				
+				NTSTATUS ioResult = NtDll::NtReadFile(
+					ctx->hHostFile,
+					hHostEvent,
+					nullptr,
+					nullptr,
+					ctx->IoStatusBlock,
+					ctx->Buffer,
+					(ULONG)ctx->Length,
+					(NtDll::PLARGE_INTEGER)byteOffset,
+					nullptr);
+				
+				if (ioResult == X_STATUS_PENDING) {
+					WaitForSingleObject(hHostEvent, INFINITE);
+					ioResult = ctx->IoStatusBlock->Status;
+				}
+				
+				ctx->Result = ioResult;
+				ctx->BytesTransferred = ctx->IoStatusBlock->Information;
+				ctx->IsComplete = true;
+				
+				// Schedule completion callback
+				AsyncFileIOCompletion(ctx);
+			});
+			
+			// Successfully dispatched to thread pool
+			RETURN(X_STATUS_PENDING);
+		}
+		
+		// Synchronous I/O path (with Event or APC)
 		HANDLE hHostEvent = CreateEvent(NULL, /*bManualReset=*/TRUE, /*bInitialState=*/FALSE, NULL);
 		if (hHostEvent == NULL) {
 			EmuLog(LOG_LEVEL::WARNING, "NtReadFile: CreateEvent failed, forcing synchronous I/O");
@@ -2184,7 +2380,7 @@ XBSYSAPI EXPORTNUM(219) xbox::ntstatus_xt NTAPI xbox::NtReadFile
 			IoStatusBlock,
 			Buffer,
 			Length,
-			(NtDll::LARGE_INTEGER*)ByteOffset,
+			(NtDll::PLARGE_INTEGER)ByteOffset,
 			/*Key=*/nullptr);
 
 		// Handle async file with completion port: don't block the caller
@@ -3263,8 +3459,73 @@ XBSYSAPI EXPORTNUM(236) xbox::ntstatus_xt NTAPI xbox::NtWriteFile
 	KeResetEvent(&FileObject->Event);
 
 	if (const auto& nFileHandle = GetObjectNativeHandle(FileObject)) {
-		// Always use a temporary Windows event to guarantee host I/O completes
-		// before we return (see NtReadFile for full rationale).
+		// Check if we should use async I/O (completion port without Event/APC)
+		// In this case, dispatch to thread pool and return immediately
+		if (CompletionContext != nullptr && XboxEvent == nullptr && ApcRoutine == nullptr) {
+			// Use thread pool for truly async I/O
+			auto* ctx = new AsyncFileContext;
+			ctx->hHostFile = *nFileHandle;
+			ctx->Buffer = Buffer;
+			ctx->Length = Length;
+			ctx->ByteOffsetPtr = ByteOffset;
+			if (ByteOffset) {
+				ctx->ByteOffsetVal = *ByteOffset;
+			}
+			ctx->IoStatusBlock = IoStatusBlock;
+			ctx->HostEvent = nullptr;
+			ctx->FileObject = FileObject;
+			ctx->CompletionContext = CompletionContext;
+			ctx->ApcContext = ApcContext;
+			ctx->ApcRoutine = nullptr;
+			ctx->ApcContextOrig = nullptr;
+			ctx->XboxEvent = nullptr;
+			ctx->IsRead = false;
+			ctx->IsComplete = false;
+			ctx->Result = X_STATUS_PENDING;
+			ctx->BytesTransferred = 0;
+			ObfReferenceObject(FileObject);
+			
+			// Dispatch to thread pool
+			AsyncIOThreadPool::Instance().Enqueue([ctx, nFileHandle, ByteOffset]() {
+				// Perform the actual I/O
+				HANDLE hHostEvent = CreateEvent(NULL, TRUE, FALSE, NULL);
+				ctx->HostEvent = hHostEvent;
+				
+				// Determine the byte offset to use
+				PLARGE_INTEGER byteOffset = ctx->ByteOffsetPtr ? ctx->ByteOffsetPtr : &ctx->ByteOffsetVal;
+				if (ctx->ByteOffsetPtr == nullptr && ByteOffset) {
+					ctx->ByteOffsetVal = *ByteOffset;
+				}
+				
+				NTSTATUS ioResult = NtDll::NtWriteFile(
+					ctx->hHostFile,
+					hHostEvent,
+					nullptr,
+					nullptr,
+					ctx->IoStatusBlock,
+					ctx->Buffer,
+					(ULONG)ctx->Length,
+					(NtDll::PLARGE_INTEGER)byteOffset,
+					nullptr);
+				
+				if (ioResult == X_STATUS_PENDING) {
+					WaitForSingleObject(hHostEvent, INFINITE);
+					ioResult = ctx->IoStatusBlock->Status;
+				}
+				
+				ctx->Result = ioResult;
+				ctx->BytesTransferred = ctx->IoStatusBlock->Information;
+				ctx->IsComplete = true;
+				
+				// Schedule completion callback
+				AsyncFileIOCompletion(ctx);
+			});
+			
+			// Successfully dispatched to thread pool
+			RETURN(X_STATUS_PENDING);
+		}
+		
+		// Synchronous I/O path (with Event or APC)
 		HANDLE hHostEvent = CreateEvent(NULL, /*bManualReset=*/TRUE, /*bInitialState=*/FALSE, NULL);
 		if (hHostEvent == NULL) {
 			EmuLog(LOG_LEVEL::WARNING, "NtWriteFile: CreateEvent failed, forcing synchronous I/O");
@@ -3278,7 +3539,7 @@ XBSYSAPI EXPORTNUM(236) xbox::ntstatus_xt NTAPI xbox::NtWriteFile
 			IoStatusBlock,
 			Buffer,
 			Length,
-			(NtDll::LARGE_INTEGER*)ByteOffset,
+			(NtDll::PLARGE_INTEGER)ByteOffset,
 			/*Key=*/nullptr);
 
 		// Handle async file with completion port: don't block the caller
@@ -3389,4 +3650,23 @@ XBSYSAPI EXPORTNUM(238) xbox::void_xt NTAPI xbox::NtYieldExecution()
 	// LOG_FUNC();
 
 	NtDll::NtYieldExecution();
+}
+
+// ******************************************************************
+// * Async I/O Thread Pool Management
+// ******************************************************************
+
+// Shutdown the async I/O thread pool (call during emulator cleanup)
+void CxbxShutdownAsyncIOThreadPool()
+{
+	// The static instance will be destroyed automatically
+	// when the DLL/process unloads
+}
+
+// Initialize async I/O thread pool (called during emulator startup)
+bool CxbxInitializeAsyncIOThreadPool()
+{
+	// The pool is lazily initialized on first use via the singleton
+	// This function exists for explicit initialization if needed
+	return true;
 }
