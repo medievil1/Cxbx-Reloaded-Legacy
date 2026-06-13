@@ -134,6 +134,37 @@ void SetupPerTitleKeys()
 xbox::void_xt NTAPI CxbxLaunchXbe(xbox::PVOID Entry)
 {
 	EmuLogInit(LOG_LEVEL::DEBUG, "Calling XBE entry point...");
+
+	// Diagnostic print for instructions at 0x00187F60
+	if (!IsBadReadPtr((void*)0x00187F60, 64)) {
+		uint8_t* pBytes = (uint8_t*)0x00187F60;
+		EmuLogInit(LOG_LEVEL::INFO, "DEBUG_BYTES_00187F60_A: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+			pBytes[0], pBytes[1], pBytes[2], pBytes[3], pBytes[4], pBytes[5], pBytes[6], pBytes[7],
+			pBytes[8], pBytes[9], pBytes[10], pBytes[11], pBytes[12], pBytes[13], pBytes[14], pBytes[15],
+			pBytes[16], pBytes[17], pBytes[18], pBytes[19], pBytes[20], pBytes[21], pBytes[22], pBytes[23],
+			pBytes[24], pBytes[25], pBytes[26], pBytes[27], pBytes[28], pBytes[29], pBytes[30], pBytes[31]);
+		EmuLogInit(LOG_LEVEL::INFO, "DEBUG_BYTES_00187F60_B: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+			pBytes[32], pBytes[33], pBytes[34], pBytes[35], pBytes[36], pBytes[37], pBytes[38], pBytes[39],
+			pBytes[40], pBytes[41], pBytes[42], pBytes[43], pBytes[44], pBytes[45], pBytes[46], pBytes[47],
+			pBytes[48], pBytes[49], pBytes[50], pBytes[51], pBytes[52], pBytes[53], pBytes[54], pBytes[55],
+			pBytes[56], pBytes[57], pBytes[58], pBytes[59], pBytes[60], pBytes[61], pBytes[62], pBytes[63]);
+	}
+
+	// Diagnostic print for instructions at 0x00185680
+	if (!IsBadReadPtr((void*)0x00185680, 64)) {
+		uint8_t* pBytes = (uint8_t*)0x00185680;
+		EmuLogInit(LOG_LEVEL::INFO, "DEBUG_BYTES_00185680_A: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+			pBytes[0], pBytes[1], pBytes[2], pBytes[3], pBytes[4], pBytes[5], pBytes[6], pBytes[7],
+			pBytes[8], pBytes[9], pBytes[10], pBytes[11], pBytes[12], pBytes[13], pBytes[14], pBytes[15],
+			pBytes[16], pBytes[17], pBytes[18], pBytes[19], pBytes[20], pBytes[21], pBytes[22], pBytes[23],
+			pBytes[24], pBytes[25], pBytes[26], pBytes[27], pBytes[28], pBytes[29], pBytes[30], pBytes[31]);
+		EmuLogInit(LOG_LEVEL::INFO, "DEBUG_BYTES_00185680_B: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+			pBytes[32], pBytes[33], pBytes[34], pBytes[35], pBytes[36], pBytes[37], pBytes[38], pBytes[39],
+			pBytes[40], pBytes[41], pBytes[42], pBytes[43], pBytes[44], pBytes[45], pBytes[46], pBytes[47],
+			pBytes[48], pBytes[49], pBytes[50], pBytes[51], pBytes[52], pBytes[53], pBytes[54], pBytes[55],
+			pBytes[56], pBytes[57], pBytes[58], pBytes[59], pBytes[60], pBytes[61], pBytes[62], pBytes[63]);
+	}
+
 	static_cast<void(*)()>(Entry)();
 	EmuLogInit(LOG_LEVEL::DEBUG, "XBE entry point returned");
 }
@@ -1475,6 +1506,8 @@ static void CxbxrKrnlInitHacks()
 				if (nv2a_irq_pending &&
 				    EmuInterruptList[3] && EmuInterruptList[3]->Connected) {
 					HalSystemInterrupts[3].Trigger(EmuInterruptList[3]);
+					extern void RunLLEHaloWorkaround();
+					RunLLEHaloWorkaround();
 				}
 			}
 
@@ -1485,6 +1518,8 @@ static void CxbxrKrnlInitHacks()
 			// when game code has set DpcRoutineActive (via fs:0x58 writes)
 			// or when we're already dispatching on this thread.
 			ExecuteDpcQueue();
+			extern void RunLLEHaloWorkaround();
+			RunLLEHaloWorkaround();
 
 			// Re-check: if NV2A interrupts are still pending after ISR+DPC processing,
 			// loop back immediately. This catches cases where:
@@ -1656,4 +1691,150 @@ void CxbxPrintUEMInfo(ULONG ErrorCode)
 void CxbxKrnlPanic()
 {
     CxbxrAbort("Kernel Panic!");
+}
+
+uint32_t g_LLEHaloSemaphoreAddress = 0x83FD6000;
+
+void RunLLEHaloWorkaround()
+{
+	static void* s_trampolinePage = nullptr;
+	if (!s_trampolinePage) {
+		// Try using NtAllocateVirtualMemory to allocate a page in the Xbox user space (must be under XBE_MAX_VA)
+		void* base = (void*)0x03FF0000;
+		size_t size = 4096;
+		xbox::ntstatus_xt status = xbox::NtAllocateVirtualMemory(&base, 0, &size, XBOX_MEM_RESERVE | XBOX_MEM_COMMIT, XBOX_PAGE_EXECUTE_READWRITE);
+		if (status != 0) {
+			for (uintptr_t addr = 0x07F00000; addr >= 0x00100000; addr -= 0x00100000) {
+				base = (void*)addr;
+				size = 4096;
+				status = xbox::NtAllocateVirtualMemory(&base, 0, &size, XBOX_MEM_RESERVE | XBOX_MEM_COMMIT, XBOX_PAGE_EXECUTE_READWRITE);
+				if (status == 0) break;
+			}
+		}
+		if (status == 0) { // X_STATUS_SUCCESS is 0
+			s_trampolinePage = base;
+			EmuLogEx(CXBXR_MODULE::X86, LOG_LEVEL::INFO, "RunLLEHaloWorkaround: Allocated trampoline page using NtAllocateVirtualMemory at 0x%p", s_trampolinePage);
+		} else {
+			EmuLogEx(CXBXR_MODULE::X86, LOG_LEVEL::WARNING, "RunLLEHaloWorkaround: NtAllocateVirtualMemory failed (status=0x%08X). Trying VirtualAlloc...", status);
+			// Fallback to VirtualAlloc
+			s_trampolinePage = VirtualAlloc((void*)0x03FF0000, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+			if (!s_trampolinePage) {
+				for (uintptr_t addr = 0x03F00000; addr >= 0x00100000; addr -= 0x00100000) {
+					s_trampolinePage = VirtualAlloc((void*)addr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+					if (s_trampolinePage) break;
+				}
+			}
+			if (s_trampolinePage) {
+				EmuLogEx(CXBXR_MODULE::X86, LOG_LEVEL::INFO, "RunLLEHaloWorkaround: Allocated trampoline page using fallback VirtualAlloc at 0x%p", s_trampolinePage);
+			} else {
+				EmuLogEx(CXBXR_MODULE::X86, LOG_LEVEL::ERROR2, "RunLLEHaloWorkaround: FAILED to allocate trampoline page!");
+			}
+		}
+
+		if (s_trampolinePage) {
+			const uint8_t trampoline_code[] = {
+				0x55,                               // push ebp
+				0x8B, 0xEC,                         // mov ebp, esp
+				0x8B, 0x45, 0x08,                   // mov eax, [ebp + 8]
+				0x85, 0xC0,                         // test eax, eax
+				0x74, 0x18,                         // jz +24
+				0x8B, 0x0D, 0x00, 0x60, 0xFD, 0x83, // mov ecx, [0x83FD6000]
+				0x8B, 0x90, 0x60, 0x2B, 0x00, 0x00, // mov edx, [eax + 0x2B60]
+				0x3B, 0xCA,                         // cmp ecx, edx
+				0x76, 0x02,                         // jbe +2
+				0x8B, 0xCA,                         // mov ecx, edx
+				0x89, 0x88, 0x18, 0x25, 0x00, 0x00, // mov [eax + 0x2518], ecx
+				0x8B, 0x55, 0x10,                   // mov edx, [ebp + 16]
+				0x85, 0xD2,                         // test edx, edx
+				0x74, 0x05,                         // jz +5
+				0x8B, 0x4D, 0x0C,                   // mov ecx, [ebp + 12]
+				0x89, 0x0A,                         // mov [edx], ecx
+				0x5D,                               // pop ebp
+				0xC3                                // ret
+			};
+			memcpy(s_trampolinePage, trampoline_code, sizeof(trampoline_code));
+		}
+	}
+
+	if (!s_trampolinePage) return;
+
+	// Update the trampoline's mov ecx, [addr] instruction with the current dynamic semaphore address
+	uint32_t* pTrampolineAddr = (uint32_t*)((uintptr_t)s_trampolinePage + 12);
+	if (*pTrampolineAddr != g_LLEHaloSemaphoreAddress) {
+		*pTrampolineAddr = g_LLEHaloSemaphoreAddress;
+	}
+
+	// Resolve D3D_g_pDevice
+	void* pDeviceGlobal = GetXboxSymbolPointer("D3D_g_pDevice");
+	uint32_t devAddr = 0;
+	if (pDeviceGlobal && !IsBadReadPtr(pDeviceGlobal, 4)) {
+		devAddr = *(uint32_t*)pDeviceGlobal;
+	}
+	uint32_t fallbackDevAddr = 0;
+	void* fallbackDeviceGlobal = (void*)0x001923A0;
+	if (!IsBadReadPtr(fallbackDeviceGlobal, 4)) {
+		fallbackDevAddr = *(uint32_t*)fallbackDeviceGlobal;
+	}
+	if (devAddr == 0 && fallbackDevAddr != 0) {
+		devAddr = fallbackDevAddr;
+	}
+
+	static uint32_t s_logCountAll = 0;
+	s_logCountAll++;
+	if (s_logCountAll < 20 || s_logCountAll % 500 == 0) {
+		EmuLogInit(LOG_LEVEL::INFO, "RunLLEHaloWorkaround loop: s_logCountAll=%u, pDeviceGlobal=0x%p, devAddr=0x%08X, fallbackDevAddr=0x%08X",
+			s_logCountAll, pDeviceGlobal, devAddr, fallbackDevAddr);
+	}
+
+	// Resolve current DMA GET value
+	uint32_t dmaGetVal = 0;
+	extern NV2ADevice* g_NV2A;
+	if (g_NV2A) {
+		NV2AState* d = g_NV2A->GetDeviceState();
+		if (d && d->pfifo.regs) {
+			dmaGetVal = d->pfifo.regs[0x1270 / 4]; // NV_PFIFO_CACHE1_GET
+		}
+	}
+
+	// Resolve the address stored in device[0x34]
+	uint32_t pDmaGet = 0;
+	if (devAddr && !IsBadReadPtr((void*)(devAddr + 0x34), 4)) {
+		pDmaGet = *(uint32_t*)(devAddr + 0x34);
+	}
+
+	// Call our trampoline!
+	if (devAddr || pDmaGet) {
+		typedef void (__cdecl *XboxWorkaroundFn)(uint32_t, uint32_t, uint32_t);
+		XboxWorkaroundFn fn = (XboxWorkaroundFn)s_trampolinePage;
+		fn(devAddr, dmaGetVal, pDmaGet);
+
+		// Rate-limited debugging to monitor values
+		static uint32_t s_logCount = 0;
+		s_logCount++;
+		if (s_logCount < 100 || s_logCount % 50 == 0) {
+			uint32_t semVal[8] = {0};
+			for (int i = 0; i < 8; i++) {
+				uint32_t addr = g_LLEHaloSemaphoreAddress + i * 4;
+				if (!IsBadReadPtr((void*)(uintptr_t)addr, 4)) {
+					semVal[i] = *(uint32_t*)(uintptr_t)addr;
+				}
+			}
+			uint32_t devFence = 0;
+			if (devAddr && !IsBadReadPtr((void*)(devAddr + 0x2518), 4)) {
+				devFence = *(uint32_t*)(devAddr + 0x2518);
+			}
+			uint32_t currentFence = 0;
+			if (devAddr && !IsBadReadPtr((void*)(devAddr + 0x2B60), 4)) {
+				currentFence = *(uint32_t*)(devAddr + 0x2B60);
+			}
+			uint32_t cachedDmaGet = 0;
+			if (pDmaGet && !IsBadReadPtr((void*)pDmaGet, 4)) {
+				cachedDmaGet = *(uint32_t*)pDmaGet;
+			}
+			EmuLogInit(LOG_LEVEL::INFO, "HaloWorkaround: count=%u, devAddr=0x%08X (completed_fence=0x%X, current_fence=0x%X), sem=[0x%X,0x%X,0x%X,0x%X,0x%X,0x%X,0x%X,0x%X], dmaGetReg=0x%X, pDmaGet=0x%08X (*pDmaGet=0x%X)",
+				s_logCount, devAddr, devFence, currentFence,
+				semVal[0], semVal[1], semVal[2], semVal[3], semVal[4], semVal[5], semVal[6], semVal[7],
+				dmaGetVal, pDmaGet, cachedDmaGet);
+		}
+	}
 }

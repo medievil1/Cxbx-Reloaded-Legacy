@@ -1589,6 +1589,13 @@ void pgraph_handle_method(NV2AState *d,
 			xbox::addr_xt semaphore_dma_len;
 			uint8_t *semaphore_data = (uint8_t*)nv_dma_map(d, pg->dma_semaphore,
 				&semaphore_dma_len);
+			uint32_t resolved_base = NV2ADevice::ResolveDmaBaseAddress(d, pg->dma_semaphore);
+			EmuLogInit(LOG_LEVEL::INFO, "SEMAPHORE RELEASE: offset=0x%X, base=0x%08X, ptr=0x%p, val=0x%X",
+				semaphore_offset, resolved_base, semaphore_data, parameter);
+
+			// Update the global LLE Halo semaphore virtual address dynamically
+			extern uint32_t g_LLEHaloSemaphoreAddress;
+			g_LLEHaloSemaphoreAddress = 0x80000000 + resolved_base + semaphore_offset;
 			if (semaphore_offset >= semaphore_dma_len) {
 				EmuLog(LOG_LEVEL::WARNING, "Semaphore offset 0x%X >= dma_len 0x%X, skipping release",
 					semaphore_offset, semaphore_dma_len);

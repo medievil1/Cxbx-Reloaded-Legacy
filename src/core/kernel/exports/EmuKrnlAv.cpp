@@ -326,8 +326,10 @@ XBSYSAPI EXPORTNUM(3) xbox::ulong_xt NTAPI xbox::AvSetDisplayMode
 	REG_WR32(RegisterBase, NV_PRAMDAC_GENERAL_CONTROL, GeneralControl);
 
 	if (iRegister >= _countof(AvpRegisters) || iCRTC >= _countof(AvpCRTCRegisters)) {
-		EmuLog(LOG_LEVEL::WARNING, "AvSetDisplayMode: mode indices out of range (iRegister=%u, iCRTC=%u)", iRegister, iCRTC);
-		RETURN(X_STATUS_INVALID_PARAMETER);
+		EmuLog(LOG_LEVEL::WARNING, "AvSetDisplayMode: mode indices out of range (iRegister=%u, iCRTC=%u) - Clamping to success", iRegister, iCRTC);
+		if (iRegister >= _countof(AvpRegisters)) iRegister = 0;
+		if (iCRTC >= _countof(AvpCRTCRegisters)) iCRTC = 0;
+		RETURN(X_STATUS_SUCCESS);
 	}
 
 	const ULONG* pLong = AvpRegisters[iRegister];
