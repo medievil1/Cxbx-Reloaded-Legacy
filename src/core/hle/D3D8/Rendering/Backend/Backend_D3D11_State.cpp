@@ -150,6 +150,7 @@ static uint32_t s_CachedSetupRasterReg = ~0u;
 static uint32_t s_CachedZOffsetBiasReg = ~0u;
 static uint32_t s_CachedZOffsetFactorReg = ~0u;
 static uint32_t s_CachedZCompressOccludeReg = ~0u;
+static bool s_CachedShadeModeFlat = false;
 void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 {
 	if (!pg) return;
@@ -289,12 +290,13 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 		}
 	}
 
-	// ---- Rasterizer state from NV_PGRAPH_SETUPRASTER (0x1990) ----
+	// ---- Rasterizer state from NV_PGRAPH_SETUPRASTER (0x1990) + CONTROL_3 (shade mode) ----
 	{
 		uint32_t setup      = pg->regs[RI(NV_PGRAPH_SETUPRASTER)];
 		uint32_t zBiasReg   = pg->regs[RI(NV_PGRAPH_ZOFFSETBIAS)];
 		uint32_t zFactorReg = pg->regs[RI(NV_PGRAPH_ZOFFSETFACTOR)];
 		uint32_t zCompOcclude = pg->regs[RI(NV_PGRAPH_ZCOMPRESSOCCLUDE)];
+		uint32_t control3   = pg->regs[RI(NV_PGRAPH_CONTROL_3)];
 
 		// ---- Point sprite enable from NV_PGRAPH_SETUPRASTER ----
 		// D3DRS_POINTSPRITEENABLE → NV097_SET_POINT_SMOOTH_ENABLE →
@@ -302,15 +304,20 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 		// NV_PGRAPH_CONTROL_3_POINTPARAMSENABLE which tracks D3DRS_POINTSCALEENABLE.
 		bool bPointSpriteEnabled = (setup & NV_PGRAPH_SETUPRASTER_POINTSMOOTHENABLE) != 0;
 
+		unsigned int shadeMode = GET_MASK(control3, NV_PGRAPH_CONTROL_3_SHADEMODE);
+		bool shadeModeFlat = (shadeMode == NV_PGRAPH_CONTROL_3_SHADEMODE_FLAT);
+
 		if (s_CachedSetupRasterReg != setup ||
 			s_CachedZOffsetBiasReg != zBiasReg ||
 			s_CachedZOffsetFactorReg != zFactorReg ||
 			s_CachedZCompressOccludeReg != zCompOcclude ||
+			s_CachedShadeModeFlat != shadeModeFlat ||
 			g_bPointSpriteEnabled != bPointSpriteEnabled) {
 			s_CachedSetupRasterReg = setup;
 			s_CachedZOffsetBiasReg = zBiasReg;
 			s_CachedZOffsetFactorReg = zFactorReg;
 			s_CachedZCompressOccludeReg = zCompOcclude;
+			s_CachedShadeModeFlat = shadeModeFlat;
 			g_bPointSpriteEnabled = bPointSpriteEnabled;
 
 			// Fill mode: PGRAPH FRONTFACEMODE 0=FILL, 1=POINT, 2=LINE
@@ -347,12 +354,17 @@ void CxbxD3D11UpdatePipelineStateFromPGRAPH(PGRAPHState *pg)
 			// Line antialiasing
 			g_D3D11RasterizerDesc.AntialiasedLineEnable = (setup & NV_PGRAPH_SETUPRASTER_LINESMOOTHENABLE) ? TRUE : FALSE;
 
-			// Depth clip vs clamp: Xbox D3D runtime always programs ZCLAMP_EN=CLAMP so
-			// geometry slightly outside [0,1] depth is clamped to the near/far plane
-			// rather than discarded.  The NV2A hardware reset state is CULL (0), but
-			// using TRUE (clip) before the game's init code sets CLAMP causes near-plane
-			// geometry to be discarded, letting far objects show through — "far objects
-			// in front".  Always use FALSE (clamp) for Xbox-compatible behaviour.
+			// Flat vs smooth shading notification (flat shading requires nointerpolation
+			// on PS inputs, which the ubershader architecture doesn't support dynamically)
+			if (shadeModeFlat) {
+				EmuLog(LOG_LEVEL::WARNING, "Flat shading requested but not yet implemented (NV097_SET_SHADE_MODE=FLAT)");
+			}
+
+			// Depth clip vs clamp: ZCLAMP_EN from NV097_SET_ZMIN_MAX_CONTROL.
+			// Xbox D3D runtime always programs CLAMP so geometry slightly outside
+			// [0,1] depth is clamped rather than discarded.  NV2A reset is CULL (0),
+			// but using TRUE (clip) before init sets CLAMP lets far objects show
+			// through.  Always clamp for Xbox-compatible behaviour.
 			g_D3D11RasterizerDesc.DepthClipEnable = FALSE;
 
 			// Depth bias - only apply when polygon offset fill is enabled
@@ -916,8 +928,8 @@ static ID3D11Texture2D* CreateHostSurfaceFromPGRAPH(
 	if (it != g_ResourceCache.end()) {
 		for (auto& entry : it->second) {
 			if (entry.format == format
-				&& entry.width == hostWidth
-				&& entry.height == hostHeight
+				&& entry.width >= hostWidth
+				&& entry.height >= hostHeight
 				&& entry.isDepthStencil == isDepthStencil) {
 				entry.lastAccessFrame = g_ResourceCacheFrameCount;
 				return entry.pTexture.Get();
@@ -1030,9 +1042,23 @@ void CxbxD3D11UpdateRenderTargetFromPGRAPH(PGRAPHState *pg)
 	// Color render target (rebind if offset changed, or if format/pitch/clip changed)
 	bool colorChanged = (colorOffset != prevColorOffset) ||
 		(surf.colorFormat != g_LastBoundSurfaceState.colorFormat) ||
-		(surf.colorPitch != g_LastBoundSurfaceState.colorPitch) ||
-		(surf.clipWidth != g_LastBoundSurfaceState.clipWidth) ||
-		(surf.clipHeight != g_LastBoundSurfaceState.clipHeight);
+		(surf.colorPitch != g_LastBoundSurfaceState.colorPitch);
+
+	if (!colorChanged && colorOffset != 0) {
+		if (g_pD3DCurrentHostRenderTarget) {
+			D3D11_TEXTURE2D_DESC curDesc;
+			g_pD3DCurrentHostRenderTarget->GetDesc(&curDesc);
+			if (curDesc.Width < rtWidth * g_RenderUpscaleFactor ||
+				curDesc.Height < rtHeight * g_RenderUpscaleFactor) {
+				colorChanged = true;
+			}
+		} else {
+			colorChanged = true;
+		}
+	} else if (colorOffset != prevColorOffset) {
+		colorChanged = true;
+	}
+
 	if (colorChanged && colorOffset != 0) {
 		ID3D11Texture2D *pHostRT = nullptr;
 		UINT mipSlice = 0;
@@ -1088,9 +1114,23 @@ void CxbxD3D11UpdateRenderTargetFromPGRAPH(PGRAPHState *pg)
 	// the save/restore pattern used by GetDepthStencilSurface2 / SetRenderTarget.
 	bool zetaChanged = (zetaOffset != prevZetaOffset) ||
 		(surf.zetaFormat != g_LastBoundSurfaceState.zetaFormat) ||
-		(surf.zetaPitch  != g_LastBoundSurfaceState.zetaPitch)  ||
-		(surf.clipWidth  != g_LastBoundSurfaceState.clipWidth)  ||
-		(surf.clipHeight != g_LastBoundSurfaceState.clipHeight);
+		(surf.zetaPitch  != g_LastBoundSurfaceState.zetaPitch);
+
+	if (!zetaChanged && zetaOffset != 0) {
+		if (g_pD3DDepthStencilBuffer) {
+			D3D11_TEXTURE2D_DESC curDesc;
+			g_pD3DDepthStencilBuffer->GetDesc(&curDesc);
+			if (curDesc.Width < rtWidth * g_RenderUpscaleFactor ||
+				curDesc.Height < rtHeight * g_RenderUpscaleFactor) {
+				zetaChanged = true;
+			}
+		} else {
+			zetaChanged = true;
+		}
+	} else if (zetaOffset != prevZetaOffset) {
+		zetaChanged = true;
+	}
+
 	if (zetaChanged) {
 		if (zetaOffset != 0) {
 			ID3D11Texture2D *pHostDS = nullptr;

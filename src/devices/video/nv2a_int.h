@@ -281,6 +281,11 @@ typedef struct CheopsState {
 	uint32_t vertex_state_shader_v0[4];
 } CheopsState;
 
+typedef struct BetaState {
+	xbox::addr_xt object_instance;
+	uint32_t beta; // Signed fixed-point, 31 fractional bits, clamped to 0 if negative
+} BetaState;
+
 typedef struct ContextSurfaces2DState {
 	xbox::addr_xt object_instance;
 	xbox::addr_xt dma_notifies; // Stored by NV097_SET_CONTEXT_DMA_NOTIFIES, to be used by ?? to trigger a notify when the blit finishes.
@@ -328,6 +333,7 @@ typedef struct PGRAPHState {
 	ContextSurfaces2DState context_surfaces_2d;
 	ImageBlitState image_blit;
 	KelvinState kelvin;
+	BetaState beta;
 
 	QemuCond fifo_access_cond;
 	QemuCond flip_3d;
@@ -342,7 +348,11 @@ typedef struct PGRAPHState {
 	uint32_t dma_base[2];        // Texture/palette DMA base
 	uint32_t dma_vertex_base[2]; // Vertex DMA base
 
+	xbox::addr_xt dma_state;
+	xbox::addr_xt dma_color;
+	xbox::addr_xt dma_zeta;
 	xbox::addr_xt dma_report;
+	bool enable_vertex_program_write;
 	unsigned int zpass_pixel_count_enable;
 	bool zpass_pixel_count_active; // true when a D3D11 occlusion query is between Begin/End
 	unsigned int zpass_pixel_count_result;

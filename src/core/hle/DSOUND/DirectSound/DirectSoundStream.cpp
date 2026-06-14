@@ -568,53 +568,83 @@ xbox::hresult_xt WINAPI xbox::EMUPATCH(CDirectSoundStream_GetStatus__r2)
     X_CDirectSoundStream*   pThis,
     OUT dword_xt*           pdwStatus)
 {
-    DSoundMutexGuardLock;
+    LPDIRECTSOUNDBUFFER8 pDSBuffer = nullptr;
+    DWORD dwStatusXbox = 0;
+    DWORD emuFlags = 0;
+    size_t packetArraySize = 0;
+    bool packetArrayEmpty = true;
+    UINT maxAttachedPackets = 0;
 
-    LOG_FUNC_BEGIN
-        LOG_FUNC_ARG(pThis)
-        LOG_FUNC_ARG_OUT(pdwStatus)
-        LOG_FUNC_END;
-
-    DWORD dwStatusXbox = pThis->Xb_Status, dwStatusHost;
-    HRESULT hRet = pThis->EmuDirectSoundBuffer8->GetStatus(&dwStatusHost);
-
-    // Convert host to xbox status flag.
-    if (hRet == DS_OK) {
-        if (pThis->Host_BufferPacketArray.size() != pThis->X_MaxAttachedPackets) {
-            dwStatusXbox |= X_DSSSTATUS_READY;
+    {
+        DSoundMutexGuardLock;
+        if (pThis && pThis->EmuDirectSoundBuffer8) {
+            pDSBuffer = pThis->EmuDirectSoundBuffer8;
+            pDSBuffer->AddRef();
+            dwStatusXbox = pThis->Xb_Status;
+            emuFlags = pThis->EmuFlags;
+            packetArraySize = pThis->Host_BufferPacketArray.size();
+            packetArrayEmpty = pThis->Host_BufferPacketArray.empty();
+            maxAttachedPackets = pThis->X_MaxAttachedPackets;
         }
-        // HACK: Likely a hack but force mimic stream's status is playing while in background is ongoing in flush process.
-        // Testcase: Obscure; Crash Twinsanity
-        if ((pThis->EmuFlags & DSE_FLAG_IS_FLUSHING) != 0) {
-            // TODO: Find a way to implement deterred commands system if possible.
-            // Then this hack may could be remove or replace to determine internal status base on deterred commands?
-            // NOTE: It may not be likely behave like on hardware in paused/stopped state. See todo note above.
-            LOG_TEST_CASE("Internal stream is currently flushing, enforcing status to playing state");
-            dwStatusXbox |= X_DSSSTATUS_PLAYING;
+    }
+
+    if (!pDSBuffer) {
+        if (pdwStatus != xbox::zeroptr) {
+            *pdwStatus = 0;
         }
-        else if (!pThis->Host_BufferPacketArray.empty()) {
-            if ((pThis->EmuFlags & DSE_FLAG_PAUSE) != 0) {
-                dwStatusXbox |= X_DSSSTATUS_PAUSED;
+        return DSERR_GENERIC;
+    }
+
+    DWORD dwStatusHost = 0;
+    HRESULT hRet = pDSBuffer->GetStatus(&dwStatusHost);
+    pDSBuffer->Release();
+
+    {
+        DSoundMutexGuardLock;
+
+        LOG_FUNC_BEGIN
+            LOG_FUNC_ARG(pThis)
+            LOG_FUNC_ARG_OUT(pdwStatus)
+            LOG_FUNC_END;
+
+        // Convert host to xbox status flag.
+        if (SUCCEEDED(hRet)) {
+            if (packetArraySize != maxAttachedPackets) {
+                dwStatusXbox |= X_DSSSTATUS_READY;
             }
-            else if ((pThis->EmuFlags & (DSE_FLAG_PAUSE | DSE_FLAG_PAUSENOACTIVATE | DSE_FLAG_IS_FLUSHING)) == 0) {
+            // HACK: Likely a hack but force mimic stream's status is playing while in background is ongoing in flush process.
+            // Testcase: Obscure; Crash Twinsanity
+            if ((emuFlags & DSE_FLAG_IS_FLUSHING) != 0) {
+                // TODO: Find a way to implement deterred commands system if possible.
+                // Then this hack may could be remove or replace to determine internal status base on deterred commands?
+                // NOTE: It may not be likely behave like on hardware in paused/stopped state. See todo note above.
+                LOG_TEST_CASE("Internal stream is currently flushing, enforcing status to playing state");
                 dwStatusXbox |= X_DSSSTATUS_PLAYING;
             }
+            else if (!packetArrayEmpty) {
+                if ((emuFlags & DSE_FLAG_PAUSE) != 0) {
+                    dwStatusXbox |= X_DSSSTATUS_PAUSED;
+                }
+                else if ((emuFlags & (DSE_FLAG_PAUSE | DSE_FLAG_PAUSENOACTIVATE | DSE_FLAG_IS_FLUSHING)) == 0) {
+                    dwStatusXbox |= X_DSSSTATUS_PLAYING;
+                }
+            }
+        } else {
+            dwStatusXbox = 0;
+            hRet = DSERR_GENERIC;
         }
-    } else {
-        dwStatusXbox = 0;
-        hRet = DSERR_GENERIC;
+
+        if (pdwStatus != xbox::zeroptr) {
+            *pdwStatus = dwStatusXbox;
+        }
+
+        // Only used for debug any future issues with custom stream's packet management
+        EmuLog(LOG_LEVEL::DEBUG, "packet array size: %d", packetArraySize);
+
+        LOG_FUNC_BEGIN_ARG_RESULT
+            LOG_FUNC_ARG_RESULT_TYPE(DSSSTATUS_FLAG, pdwStatus)
+        LOG_FUNC_END_ARG_RESULT;
     }
-
-    if (pdwStatus != xbox::zeroptr) {
-        *pdwStatus = dwStatusXbox;
-    }
-
-    // Only used for debug any future issues with custom stream's packet management
-    EmuLog(LOG_LEVEL::DEBUG, "packet array size: %d", pThis->Host_BufferPacketArray.size());
-
-    LOG_FUNC_BEGIN_ARG_RESULT
-        LOG_FUNC_ARG_RESULT_TYPE(DSSSTATUS_FLAG, pdwStatus)
-    LOG_FUNC_END_ARG_RESULT;
 
     return hRet;
 }

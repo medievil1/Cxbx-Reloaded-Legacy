@@ -134,17 +134,21 @@ static void CxbxEnsureUnswizzleStagingBuffer(UINT requiredSize)
 #define CXBX_UNSW_DECODE_B5G6R5     2
 #define CXBX_UNSW_DECODE_B5G5R5A1   3
 #define CXBX_UNSW_DECODE_R10G10B10A2 4
+#define CXBX_UNSW_DECODE_RGBA8      5
 
 // Returns the typed-unswizzle decode constant for a format, or -1 if not supported.
 static int CxbxGetTypedUnswizzleDecode(DXGI_FORMAT format)
 {
 	switch (format) {
 	case DXGI_FORMAT_B8G8R8A8_UNORM:
+	case DXGI_FORMAT_B8G8R8A8_UNORM_SRGB:
 	case DXGI_FORMAT_B8G8R8X8_UNORM:     return CXBX_UNSW_DECODE_BGRA8;
 	case DXGI_FORMAT_B4G4R4A4_UNORM:     return CXBX_UNSW_DECODE_B4G4R4A4;
 	case DXGI_FORMAT_B5G6R5_UNORM:       return CXBX_UNSW_DECODE_B5G6R5;
 	case DXGI_FORMAT_B5G5R5A1_UNORM:     return CXBX_UNSW_DECODE_B5G5R5A1;
 	case DXGI_FORMAT_R10G10B10A2_UNORM:  return CXBX_UNSW_DECODE_R10G10B10A2;
+	case DXGI_FORMAT_R8G8B8A8_UNORM:
+	case DXGI_FORMAT_R8G8B8A8_UNORM_SRGB: return CXBX_UNSW_DECODE_RGBA8;
 	default: return -1;
 	}
 }

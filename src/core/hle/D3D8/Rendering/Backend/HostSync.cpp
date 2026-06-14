@@ -47,9 +47,11 @@ static inline bool IsNV2AColorFormatLinear(uint32_t colorFmt) {
 	if (colorFmt >= NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_DEPTH_X8_Y24_FIXED
 		&& colorFmt <= NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_DEPTH_Y16_FLOAT)
 		return true;
-	// LU_IMAGE range 2: 0x35..0x40
+	// LU_IMAGE range 2: 0x35..0x41, but excluding SZ_R5G5B5A1 (0x38) through SZ_R8G8B8A8 (0x3C)
 	if (colorFmt >= NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_Y16
-		&& colorFmt <= NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_B8G8R8A8)
+		&& colorFmt <= NV097_SET_TEXTURE_FORMAT_COLOR_LU_IMAGE_R8G8B8A8
+		&& (colorFmt < NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R5G5B5A1
+			|| colorFmt > NV097_SET_TEXTURE_FORMAT_COLOR_SZ_R8G8B8A8))
 		return true;
 	return false;
 }
@@ -634,8 +636,14 @@ void CxbxUpdateHostTextureScaling()
 		uint32_t texOffset = s_CachedTexOff[stage];
 		uint32_t texCtl0 = s_CachedTexCtl[stage];
 
-		// No texture bound or disabled — skip
-		bool texEnabled = (texCtl0 & (1 << 30)) != 0;
+		// Check PGRAPH TEXCTL0 enable bit (with SHADERPROG override)
+		bool texEnabled = NV2AIsTextureEnabled(d, stage);
+		if (!texEnabled) {
+			uint32_t shaderProg = pg->regs[RI(NV_PGRAPH_SHADERPROG)];
+			uint32_t stageMode = (shaderProg >> (stage * 5)) & 0x1Fu;
+			if (stageMode != 0)
+				texEnabled = true;
+		}
 		if (!texEnabled || texOffset == 0) {
 			continue;
 		}

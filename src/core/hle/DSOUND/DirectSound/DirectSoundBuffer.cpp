@@ -348,38 +348,60 @@ xbox::hresult_xt WINAPI xbox::EMUPATCH(IDirectSoundBuffer_GetStatus)
     XbHybridDSBuffer*       pHybridThis,
     OUT LPDWORD             pdwStatus)
 {
-    DSoundMutexGuardLock;
+    LOG_FUNC_BEGIN
+        LOG_FUNC_ARG(pHybridThis)
+        LOG_FUNC_ARG_OUT(pdwStatus)
+        LOG_FUNC_END;
 
-	LOG_FUNC_BEGIN
-		LOG_FUNC_ARG(pHybridThis)
-		LOG_FUNC_ARG_OUT(pdwStatus)
-		LOG_FUNC_END;
+    LPDIRECTSOUNDBUFFER8 pDSBuffer = nullptr;
+    DWORD dwStatusXbox = 0;
+    DWORD emuFlags = 0;
 
-    EmuDirectSoundBuffer* pThis = pHybridThis->emuDSBuffer;
-    DWORD dwStatusXbox = 0, dwStatusHost;
-    HRESULT hRet = pThis->EmuDirectSoundBuffer8->GetStatus(&dwStatusHost);
-
-    // Conversion is a requirement to xbox.
-    if (hRet == DS_OK) {
-        if ((pThis->EmuFlags & DSE_FLAG_PAUSE) > 0) {
-            dwStatusXbox = X_DSBSTATUS_PAUSED;
-        } else if ((dwStatusHost & DSBSTATUS_PLAYING) > 0) {
-            dwStatusXbox = X_DSBSTATUS_PLAYING;
-        }
-        if ((dwStatusHost & DSBSTATUS_LOOPING) > 0) {
-            dwStatusXbox |= X_DSBSTATUS_LOOPING;
+    {
+        DSoundMutexGuardLock;
+        if (pHybridThis && pHybridThis->emuDSBuffer && pHybridThis->emuDSBuffer->EmuDirectSoundBuffer8) {
+            pDSBuffer = pHybridThis->emuDSBuffer->EmuDirectSoundBuffer8;
+            pDSBuffer->AddRef();
+            emuFlags = pHybridThis->emuDSBuffer->EmuFlags;
         }
     }
 
-    if (pdwStatus != xbox::zeroptr) {
-        *pdwStatus = dwStatusXbox;
-    } else {
-        hRet = DSERR_INVALIDPARAM;
+    if (!pDSBuffer) {
+        if (pdwStatus != xbox::zeroptr) {
+            *pdwStatus = 0;
+        }
+        RETURN(DSERR_INVALIDPARAM);
     }
 
-    LOG_FUNC_BEGIN_ARG_RESULT
-        LOG_FUNC_ARG_RESULT_TYPE(DSBSTATUS_FLAG, pdwStatus)
-    LOG_FUNC_END_ARG_RESULT;
+    DWORD dwStatusHost = 0;
+    HRESULT hRet = pDSBuffer->GetStatus(&dwStatusHost);
+    pDSBuffer->Release();
+
+    {
+        DSoundMutexGuardLock;
+
+        // Conversion is a requirement to xbox.
+        if (hRet == DS_OK) {
+            if ((emuFlags & DSE_FLAG_PAUSE) > 0) {
+                dwStatusXbox = X_DSBSTATUS_PAUSED;
+            } else if ((dwStatusHost & DSBSTATUS_PLAYING) > 0) {
+                dwStatusXbox = X_DSBSTATUS_PLAYING;
+            }
+            if ((dwStatusHost & DSBSTATUS_LOOPING) > 0) {
+                dwStatusXbox |= X_DSBSTATUS_LOOPING;
+            }
+        }
+
+        if (pdwStatus != xbox::zeroptr) {
+            *pdwStatus = dwStatusXbox;
+        } else {
+            hRet = DSERR_INVALIDPARAM;
+        }
+
+        LOG_FUNC_BEGIN_ARG_RESULT
+            LOG_FUNC_ARG_RESULT_TYPE(DSBSTATUS_FLAG, pdwStatus)
+        LOG_FUNC_END_ARG_RESULT;
+    }
 
     RETURN(hRet);
 }

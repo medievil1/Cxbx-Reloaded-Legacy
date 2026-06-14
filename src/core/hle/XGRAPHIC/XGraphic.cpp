@@ -33,6 +33,7 @@
 #include "common\Logging.h"
 #include "core\kernel\init\CxbxKrnl.h" // For CxbxrAbort()
 #include "core\hle\XAPI\Xapi.h" // For EMUPATCH
+#include "core\hle\D3D8\XbConvert.h" // For EmuXBFormatIsSwizzled
 #include "core\hle\D3D8\XbD3D8Logging.h" // for log rendering of X_D3DFORMAT, etc.
 #include "core\hle\XGRAPHIC\XGraphic.h"
 
@@ -46,7 +47,7 @@ PVOID WINAPI xbox::EMUPATCH(XGIsSwizzledFormat)
 {
 	LOG_FUNC_ONE_ARG(Format);
 
-	RETURN(FALSE);
+	RETURN((PVOID)EmuXBFormatIsSwizzled(Format));
 }
 
 #if 0 // Leave unpatched

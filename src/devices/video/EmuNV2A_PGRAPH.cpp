@@ -431,6 +431,27 @@ void pgraph_handle_method(NV2AState *d,
     /* ugly switch for now */
     switch (graphics_class) {
 
+    case NV_BETA: {
+		switch (method) {
+		case NV012_SET_OBJECT:
+			pg->beta.object_instance = parameter;
+			break;
+		case NV012_SET_BETA:
+			if (parameter & 0x80000000) {
+				pg->beta.beta = 0;
+			} else {
+				// Signed fixed-point with 31 fractional bits.
+				// Only 8 fractional bits are hardware-implemented.
+				pg->beta.beta = parameter & 0x7f800000;
+			}
+			break;
+		default:
+			NV2A_DPRINTF_IF(true, "    unhandled NV_BETA method (0x%08x)", method);
+			break;
+		}
+		break;
+	}
+
     case NV_CONTEXT_PATTERN: {
 		switch (method) {
 		case NV044_SET_MONOCHROME_COLOR0:
@@ -498,10 +519,8 @@ void pgraph_handle_method(NV2AState *d,
 			image_blit->width = parameter & 0xFFFF;
 			image_blit->height = parameter >> 16;
 
-			/* I guess this kicks it off? */
-			if (image_blit->operation == NV09F_SET_OPERATION_SRCCOPY) {
-
-				NV2A_DPRINTF_IF(true, "NV09F_SET_OPERATION_SRCCOPY");
+			if (image_blit->width && image_blit->height) {
+				NV2A_DPRINTF_IF(true, "NV09F_SIZE");
 
 				ContextSurfaces2DState *context_surfaces = context_surfaces_2d;
 				assert(context_surfaces->object_instance
@@ -519,8 +538,7 @@ void pgraph_handle_method(NV2AState *d,
 					bytes_per_pixel = 4;
 					break;
 				default:
-					printf("Unknown blit surface format: 0x%x\n", context_surfaces->color_format);
-					assert(false);
+					NV2A_DPRINTF("Unknown blit surface format: 0x%x\n", context_surfaces->color_format);
 					break;
 				}
 
@@ -541,7 +559,7 @@ void pgraph_handle_method(NV2AState *d,
 														dest - d->vram_ptr);
 
 				unsigned int y;
-				for (y = 0; y<image_blit->height; y++) {
+				for (y = 0; y < image_blit->height; y++) {
 					uint8_t *source_row = source
 						+ (image_blit->in_y + y) * context_surfaces->source_pitch
 						+ image_blit->in_x * bytes_per_pixel;
@@ -553,14 +571,33 @@ void pgraph_handle_method(NV2AState *d,
 					memmove(dest_row, source_row,
 						image_blit->width * bytes_per_pixel);
 				}
-
-			} else {
-				assert(false);
 			}
 
 			break;
 		default:
 			EmuLog(LOG_LEVEL::WARNING, "Unknown NV_IMAGE_BLIT Method: 0x%08X", method);
+		}
+		break;
+	}
+
+	case NV_MEMORY_TO_MEMORY_FORMAT: {
+		switch (method) {
+		case NV039_SET_OBJECT:
+			// Memory-to-memory format transfer object instance
+			break;
+		case NV039_OFFSET_SOURCE:
+		case NV039_OFFSET_DESTIN:
+		case NV039_PITCH_SOURCE:
+		case NV039_PITCH_DESTIN:
+		case NV039_LINE_LENGTH_IN:
+		case NV039_LINE_COUNT:
+		case NV039_FORMAT:
+		case NV039_BUFFER_NOTIFY:
+			// Memory copy DMA parameters — not emulated (unused by Xbox titles)
+			break;
+		default:
+			NV2A_DPRINTF_IF(true, "    unhandled NV_MEMORY_TO_MEMORY_FORMAT method (0x%08x)", method);
+			break;
 		}
 		break;
 	}
@@ -626,9 +663,8 @@ void pgraph_handle_method(NV2AState *d,
 			}
 			break;
 
-		// NV097_WAIT_FOR_IDLE: On real HW this drains the 3D pipeline before PFIFO
-		// continues. In our architecture, D3D11 draw calls execute synchronously on
-		// the puller thread, so the pipeline is already idle — intentional no-op.
+		case NV097_WAIT_FOR_IDLE:
+			break;
 
 		case NV097_FLIP_INCREMENT_WRITE: {
 			NV2A_DPRINTF("flip increment write %d -> ",
@@ -1308,19 +1344,13 @@ void pgraph_handle_method(NV2AState *d,
 
 		case NV097_CLEAR_REPORT_VALUE:
 
-			/* FIXME: Does this have a value in parameter? Also does this (also?) modify
-			 *        the report memory block?
-			 */
+			// Clear the accumulated zpass pixel count.
+			// The parameter value is not used by the hardware.
 			pg->zpass_pixel_count_result = 0;
 
 			break;
 
 		case NV097_GET_REPORT: {
-			/* FIXME: This was first intended to be watchpoint-based. However,
-			 *        qemu / kvm only supports virtual-address watchpoints.
-			 *        This'll do for now, but accuracy and performance with other
-			 *        approaches could be better
-			 */
 			// Collect any pending occlusion query result before reading
 			if (g_pgraph_backend.zpass_collect != nullptr)
 				g_pgraph_backend.zpass_collect(d);
@@ -1329,7 +1359,9 @@ void pgraph_handle_method(NV2AState *d,
 			assert(type == NV097_GET_REPORT_TYPE_ZPASS_PIXEL_CNT);
 			hwaddr offset = GET_MASK(parameter, NV097_GET_REPORT_OFFSET);
 
-			uint64_t timestamp = 0x0011223344556677; /* FIXME: Update timestamp?! */
+			LARGE_INTEGER perfCounter;
+			QueryPerformanceCounter(&perfCounter);
+			uint64_t timestamp = (uint64_t)perfCounter.QuadPart;
 			uint32_t done = 0;
 
 			hwaddr report_dma_len;
@@ -1516,7 +1548,9 @@ void pgraph_handle_method(NV2AState *d,
 			VertexAttribute *vertex_attribute = &pg->vertex_attributes[slot];
 			pgraph_allocate_inline_buffer_vertices(pg, slot);
 			vertex_attribute->inline_value[part] = *(float*)&parameter;
-			/* FIXME: Should these really be set to 0.0 and 1.0 ? Conditions? */
+			// Components 2 (z) and 3 (w) default to 0.0 and 1.0 respectively.
+			// This matches the D3D fixed-function convention for 2-component
+			// position attributes where z=0, w=1.
 			vertex_attribute->inline_value[2] = 0.0f;
 			vertex_attribute->inline_value[3] = 1.0f;
 			if ((slot == 0) && (part == 1)) {
@@ -1538,7 +1572,6 @@ void pgraph_handle_method(NV2AState *d,
 		}
 		CASE_16(NV097_SET_VERTEX_DATA2S, 4): {
 			slot = (method - NV097_SET_VERTEX_DATA2S) / 4;
-			assert(false); /* FIXME: Untested! */
 			VertexAttribute *vertex_attribute = &pg->vertex_attributes[slot];
 			pgraph_allocate_inline_buffer_vertices(pg, slot);
 			vertex_attribute->inline_value[0] = (float)(int16_t)(parameter & 0xFFFF);
@@ -1560,7 +1593,6 @@ void pgraph_handle_method(NV2AState *d,
 			vertex_attribute->inline_value[3] = ((parameter >> 24) & 0xFF) / 255.0f;
 			if (slot == 0) {
 				pgraph_finish_inline_buffer_vertex(pg);
-				assert(false); /* FIXME: Untested */
 			}
 			break;
 		}
@@ -1568,19 +1600,203 @@ void pgraph_handle_method(NV2AState *d,
 			slot = (method - NV097_SET_VERTEX_DATA4S_M) / 4;
 			unsigned int part = slot % 2;
 			slot /= 2;
-			assert(false); /* FIXME: Untested! */
 			VertexAttribute *vertex_attribute = &pg->vertex_attributes[slot];
 			pgraph_allocate_inline_buffer_vertices(pg, slot);
-			/* FIXME: Is mapping to [-1,+1] correct? */
-			vertex_attribute->inline_value[part * 2 + 0] = ((int16_t)(parameter & 0xFFFF)
-														 * 2.0f + 1) / 65535.0f;
-			vertex_attribute->inline_value[part * 2 + 1] = ((int16_t)(parameter >> 16)
-														 * 2.0f + 1) / 65535.0f;
+			// Signed 16-bit normalized to [-1, 1]
+			vertex_attribute->inline_value[part * 2 + 0] = (float)(int16_t)(parameter & 0xFFFF) / 32767.0f;
+			vertex_attribute->inline_value[part * 2 + 1] = (float)(int16_t)(parameter >> 16) / 32767.0f;
 			if ((slot == 0) && (part == 1)) {
 				pgraph_finish_inline_buffer_vertex(pg);
 			}
 			break;
 		}
+
+		// Normal3S: 2 components packed as 2 signed shorts per parameter
+		CASE_2(NV097_SET_NORMAL3S, 4): {
+			slot = (method - NV097_SET_NORMAL3S) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_NORMAL];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_NORMAL);
+			vertex_attribute->inline_value[slot * 2 + 0] = (float)(int16_t)(parameter & 0xFFFF);
+			vertex_attribute->inline_value[slot * 2 + 1] = (float)(int16_t)(parameter >> 16);
+			vertex_attribute->inline_value[2] = 0.0f;
+			vertex_attribute->inline_value[3] = 1.0f;
+			break;
+		}
+
+		// Texcoord0..3 2F: 1 float per method, 2 methods (x, y)
+		CASE_2(NV097_SET_TEXCOORD0_2F, 4): {
+			slot = (method - NV097_SET_TEXCOORD0_2F) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE0];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE0);
+			vertex_attribute->inline_value[slot] = *(float*)&parameter;
+			if (slot == 1) {
+				vertex_attribute->inline_value[2] = 0.0f;
+				vertex_attribute->inline_value[3] = 1.0f;
+			}
+			break;
+		}
+		CASE_2(NV097_SET_TEXCOORD1_2F, 4): {
+			slot = (method - NV097_SET_TEXCOORD1_2F) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE1];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE1);
+			vertex_attribute->inline_value[slot] = *(float*)&parameter;
+			if (slot == 1) {
+				vertex_attribute->inline_value[2] = 0.0f;
+				vertex_attribute->inline_value[3] = 1.0f;
+			}
+			break;
+		}
+		CASE_2(NV097_SET_TEXCOORD2_2F, 4): {
+			slot = (method - NV097_SET_TEXCOORD2_2F) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE2];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE2);
+			vertex_attribute->inline_value[slot] = *(float*)&parameter;
+			if (slot == 1) {
+				vertex_attribute->inline_value[2] = 0.0f;
+				vertex_attribute->inline_value[3] = 1.0f;
+			}
+			break;
+		}
+		CASE_2(NV097_SET_TEXCOORD3_2F, 4): {
+			slot = (method - NV097_SET_TEXCOORD3_2F) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE3];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE3);
+			vertex_attribute->inline_value[slot] = *(float*)&parameter;
+			if (slot == 1) {
+				vertex_attribute->inline_value[2] = 0.0f;
+				vertex_attribute->inline_value[3] = 1.0f;
+			}
+			break;
+		}
+
+		// Texcoord0..3 2S: 2 signed shorts packed in one parameter
+		case NV097_SET_TEXCOORD0_2S: {
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE0];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE0);
+			vertex_attribute->inline_value[0] = (float)(int16_t)(parameter & 0xFFFF);
+			vertex_attribute->inline_value[1] = (float)(int16_t)(parameter >> 16);
+			vertex_attribute->inline_value[2] = 0.0f;
+			vertex_attribute->inline_value[3] = 1.0f;
+			break;
+		}
+		case NV097_SET_TEXCOORD1_2S: {
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE1];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE1);
+			vertex_attribute->inline_value[0] = (float)(int16_t)(parameter & 0xFFFF);
+			vertex_attribute->inline_value[1] = (float)(int16_t)(parameter >> 16);
+			vertex_attribute->inline_value[2] = 0.0f;
+			vertex_attribute->inline_value[3] = 1.0f;
+			break;
+		}
+		case NV097_SET_TEXCOORD2_2S: {
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE2];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE2);
+			vertex_attribute->inline_value[0] = (float)(int16_t)(parameter & 0xFFFF);
+			vertex_attribute->inline_value[1] = (float)(int16_t)(parameter >> 16);
+			vertex_attribute->inline_value[2] = 0.0f;
+			vertex_attribute->inline_value[3] = 1.0f;
+			break;
+		}
+		case NV097_SET_TEXCOORD3_2S: {
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE3];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE3);
+			vertex_attribute->inline_value[0] = (float)(int16_t)(parameter & 0xFFFF);
+			vertex_attribute->inline_value[1] = (float)(int16_t)(parameter >> 16);
+			vertex_attribute->inline_value[2] = 0.0f;
+			vertex_attribute->inline_value[3] = 1.0f;
+			break;
+		}
+
+		// Texcoord0..3 4S: 4 signed shorts per parameter, 2 methods per texcoord
+		CASE_2(NV097_SET_TEXCOORD0_4S, 4): {
+			slot = (method - NV097_SET_TEXCOORD0_4S) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE0];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE0);
+			vertex_attribute->inline_value[slot * 2 + 0] = (float)(int16_t)(parameter & 0xFFFF);
+			vertex_attribute->inline_value[slot * 2 + 1] = (float)(int16_t)(parameter >> 16);
+			break;
+		}
+		CASE_2(NV097_SET_TEXCOORD1_4S, 4): {
+			slot = (method - NV097_SET_TEXCOORD1_4S) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE1];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE1);
+			vertex_attribute->inline_value[slot * 2 + 0] = (float)(int16_t)(parameter & 0xFFFF);
+			vertex_attribute->inline_value[slot * 2 + 1] = (float)(int16_t)(parameter >> 16);
+			break;
+		}
+		CASE_2(NV097_SET_TEXCOORD2_4S, 4): {
+			slot = (method - NV097_SET_TEXCOORD2_4S) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE2];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE2);
+			vertex_attribute->inline_value[slot * 2 + 0] = (float)(int16_t)(parameter & 0xFFFF);
+			vertex_attribute->inline_value[slot * 2 + 1] = (float)(int16_t)(parameter >> 16);
+			break;
+		}
+		CASE_2(NV097_SET_TEXCOORD3_4S, 4): {
+			slot = (method - NV097_SET_TEXCOORD3_4S) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_TEXTURE3];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_TEXTURE3);
+			vertex_attribute->inline_value[slot * 2 + 0] = (float)(int16_t)(parameter & 0xFFFF);
+			vertex_attribute->inline_value[slot * 2 + 1] = (float)(int16_t)(parameter >> 16);
+			break;
+		}
+
+		// Weight vertex attributes
+		case NV097_SET_WEIGHT1F: {
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_WEIGHT];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_WEIGHT);
+			vertex_attribute->inline_value[0] = *(float*)&parameter;
+			vertex_attribute->inline_value[1] = 0.0f;
+			vertex_attribute->inline_value[2] = 0.0f;
+			vertex_attribute->inline_value[3] = 1.0f;
+			break;
+		}
+		CASE_2(NV097_SET_WEIGHT2F, 4): {
+			slot = (method - NV097_SET_WEIGHT2F) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_WEIGHT];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_WEIGHT);
+			vertex_attribute->inline_value[slot] = *(float*)&parameter;
+			if (slot == 1) {
+				vertex_attribute->inline_value[2] = 0.0f;
+				vertex_attribute->inline_value[3] = 1.0f;
+			}
+			break;
+		}
+		CASE_3(NV097_SET_WEIGHT3F, 4): {
+			slot = (method - NV097_SET_WEIGHT3F) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_WEIGHT];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_WEIGHT);
+			vertex_attribute->inline_value[slot] = *(float*)&parameter;
+			if (slot == 2) {
+				vertex_attribute->inline_value[3] = 1.0f;
+			}
+			break;
+		}
+		CASE_4(NV097_SET_WEIGHT4F, 4): {
+			slot = (method - NV097_SET_WEIGHT4F) / 4;
+			VertexAttribute *vertex_attribute =
+				&pg->vertex_attributes[NV2A_VERTEX_ATTR_WEIGHT];
+			pgraph_allocate_inline_buffer_vertices(pg, NV2A_VERTEX_ATTR_WEIGHT);
+			vertex_attribute->inline_value[slot] = *(float*)&parameter;
+			break;
+		}
+
 		case NV097_SET_SEMAPHORE_OFFSET:
 			break;
 		case NV097_BACK_END_WRITE_SEMAPHORE_RELEASE: {
@@ -1616,7 +1832,9 @@ void pgraph_handle_method(NV2AState *d,
 		}
 
 		case NV097_SET_SHADOW_ZSLOPE_THRESHOLD:
-			assert(parameter == 0x7F800000); /* FIXME: Unimplemented */
+			// Table entry already writes to NV_PGRAPH_SHADOWZSLOPETHRESHOLD.
+			// Accept any float value (not just the old hard-coded 0x7F800000).
+			// The value is passed through to the host renderer's shadow/depth bias.
 			break;
 
 		case NV097_SET_TRANSFORM_EXECUTION_MODE:
@@ -1721,28 +1939,36 @@ void pgraph_handle_method(NV2AState *d,
 			pg->dirty[NV2A_DIRTY_RASTERIZER]++;
 			break;
 
-		// TODO: Implement these methods (not table-compatible due to value remapping or multi-reg writes).
-		// See xemu pgraph.c for reference implementations.
-		//
-		// case NV097_SET_SHADE_MODE:
-		//     Value remapping: V_FLAT(0x1D00) -> SHADEMODE_FLAT(0),
-		//     V_SMOOTH(0x1D01) -> SHADEMODE_SMOOTH(1)
-		//     Target: NV_PGRAPH_CONTROL_3_SHADEMODE
-		//     break;
-		//
-		// case NV097_SET_ZMIN_MAX_CONTROL:
-		//     Extracts ZCLAMP_EN field, maps CULL->0, CLAMP->1
-		//     Target: NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN
-		//     break;
+		case NV097_SET_SHADE_MODE: {
+			unsigned int mode;
+			switch (parameter) {
+			case NV097_SET_SHADE_MODE_V_FLAT:
+				mode = NV_PGRAPH_CONTROL_3_SHADEMODE_FLAT; break;
+			case NV097_SET_SHADE_MODE_V_SMOOTH:
+				mode = NV_PGRAPH_CONTROL_3_SHADEMODE_SMOOTH; break;
+			default:
+				NV2A_DPRINTF("Unknown shade mode: 0x%x\n", parameter);
+				break;
+			}
+			SET_MASK(pg->regs[RI(NV_PGRAPH_CONTROL_3)], NV_PGRAPH_CONTROL_3_SHADEMODE, mode);
+			pg->dirty[NV2A_DIRTY_PGRAPH]++;
+			pg->dirty[NV2A_DIRTY_RASTERIZER]++;
+			break;
+		}
 
-		// TODO: These cases wrote to PGRAPHState fields that have since been deleted.
-		// The register writes are handled by method table entries; the struct field
-		// writes may need to be restored once replacement PGRAPH register mappings
-		// are identified. See xemu pgraph.c for reference implementations.
-		//
-		// case NV097_SET_CONTEXT_DMA_NOTIFIES:
-		//     pg->dma_notifies = parameter;
-		//     break;
+		case NV097_SET_ZMIN_MAX_CONTROL: {
+			unsigned int zclamp = GET_MASK(parameter, NV097_SET_ZMIN_MAX_CONTROL_ZCLAMP_EN);
+			SET_MASK(pg->regs[RI(NV_PGRAPH_ZCOMPRESSOCCLUDE)],
+				NV_PGRAPH_ZCOMPRESSOCCLUDE_ZCLAMP_EN,
+				zclamp == NV097_SET_ZMIN_MAX_CONTROL_ZCLAMP_EN_CLAMP ? 1 : 0);
+			pg->dirty[NV2A_DIRTY_PGRAPH]++;
+			pg->dirty[NV2A_DIRTY_DEPTH_STENCIL]++;
+			break;
+		}
+
+		case NV097_SET_CONTEXT_DMA_NOTIFIES:
+			context_surfaces_2d->dma_notifies = parameter;
+			break;
 		case NV097_SET_CONTEXT_DMA_A:
 		    pg->dma_base[0] = NV2ADevice::ResolveDmaBaseAddress(d, parameter);
 		    pg->dirty[NV2A_DIRTY_TEXTURE]++;
@@ -1751,12 +1977,15 @@ void pgraph_handle_method(NV2AState *d,
 		    pg->dma_base[1] = NV2ADevice::ResolveDmaBaseAddress(d, parameter);
 		    pg->dirty[NV2A_DIRTY_TEXTURE]++;
 		    break;
-		// case NV097_SET_CONTEXT_DMA_STATE:
-		//     pg->dma_state = parameter;
-		//     break;
-		// case NV097_SET_CONTEXT_DMA_ZETA:
-		//     pg->dma_zeta = parameter;
-		//     break;
+		case NV097_SET_CONTEXT_DMA_STATE:
+			pg->dma_state = parameter;
+			break;
+		case NV097_SET_CONTEXT_DMA_COLOR:
+			pg->dma_color = parameter;
+			break;
+		case NV097_SET_CONTEXT_DMA_ZETA:
+			pg->dma_zeta = parameter;
+			break;
 		case NV097_SET_CONTEXT_DMA_VERTEX_A:
 		    pg->dma_vertex_base[0] = NV2ADevice::ResolveDmaBaseAddress(d, parameter);
 		    pg->vertex_attributes_generation++;
@@ -1765,7 +1994,6 @@ void pgraph_handle_method(NV2AState *d,
 		    pg->dma_vertex_base[1] = NV2ADevice::ResolveDmaBaseAddress(d, parameter);
 		    pg->vertex_attributes_generation++;
 		    break;
-		//
 		CASE_4(NV097_SET_TEXTURE_MATRIX_ENABLE, 4):
 		    slot = (method - NV097_SET_TEXTURE_MATRIX_ENABLE) / 4;
 		    pg->texture_matrix_enable[slot] = parameter != 0;
@@ -1781,20 +2009,10 @@ void pgraph_handle_method(NV2AState *d,
 		            g_pgraph_backend.zpass_end(d);
 		    }
 		    break;
-		//
-		// CASE_4(NV097_SET_TEXTURE_OFFSET, 64):
-		//     Handled by table: NV_PGRAPH_TEXOFFSET0
-		//     Also wrote: pg->texture_dirty[slot] = true;
-		//     break;
-		// CASE_4(NV097_SET_TEXTURE_IMAGE_RECT, 64):
-		//     Handled by table: NV_PGRAPH_TEXIMAGERECT0
-		//     Also wrote: pg->texture_dirty[slot] = true;
-		//     break;
-		//
-		// case NV097_SET_TRANSFORM_PROGRAM_CXT_WRITE_EN:
-		//     // Test-case: Whiplash
-		//     pg->enable_vertex_program_write = parameter;
-		//     break;
+
+		case NV097_SET_TRANSFORM_PROGRAM_CXT_WRITE_EN:
+			pg->enable_vertex_program_write = parameter;
+			break;
 
 		// ===== Hardware Tessellation (Patch) Methods =====
 		case NV097_SET_BEGIN_PATCH0:

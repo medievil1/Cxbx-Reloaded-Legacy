@@ -5,7 +5,7 @@ ByteAddressBuffer g_SrcBuffer : register(t0);
 RWTexture2D<float4> g_DstTexture : register(u0);
 cbuffer UnswizzleConstants : register(b0) {
     uint maskX; uint maskY; uint texWidth; uint texHeight; uint bpp;
-    uint fmtDecode; // 0=BGRA8, 1=B4G4R4A4, 2=B5G6R5, 3=B5G5R5A1, 4=R10G10B10A2
+    uint fmtDecode; // 0=BGRA8, 1=B4G4R4A4, 2=B5G6R5, 3=B5G5R5A1, 4=R10G10B10A2, 5=RGBA8
     uint pad0;
     uint srcOffset; // byte offset into g_SrcBuffer (0 = staging, nonzero = mirror)
 };
@@ -63,6 +63,14 @@ float4 DecodeR10G10B10A2(uint value) {
     return float4(r, g, b, a);
 }
 
+float4 DecodeRGBA8(uint value) {
+    float r = float((value >>  0) & 0xFF) / 255.0;
+    float g = float((value >>  8) & 0xFF) / 255.0;
+    float b = float((value >> 16) & 0xFF) / 255.0;
+    float a = float((value >> 24) & 0xFF) / 255.0;
+    return float4(r, g, b, a);
+}
+
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID) {
     uint x = dtid.x; uint y = dtid.y;
@@ -83,6 +91,7 @@ void main(uint3 dtid : SV_DispatchThreadID) {
     case 2:  color = DecodeB5G6R5(value);   break;
     case 3:  color = DecodeB5G5R5A1(value); break;
     case 4:  color = DecodeR10G10B10A2(value); break;
+    case 5:  color = DecodeRGBA8(value); break;
     default: color = DecodeBGRA8(value);    break;
     }
     g_DstTexture[uint2(x, y)] = color;
