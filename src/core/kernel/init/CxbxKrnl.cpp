@@ -1695,74 +1695,12 @@ void CxbxKrnlPanic()
 
 uint32_t g_LLEHaloSemaphoreAddress = 0x83FD6000;
 
+#include "devices/video/nv2a.h"
+
 void RunLLEHaloWorkaround()
 {
-	static void* s_trampolinePage = nullptr;
-	if (!s_trampolinePage) {
-		// Try using NtAllocateVirtualMemory to allocate a page in the Xbox user space (must be under XBE_MAX_VA)
-		void* base = (void*)0x03FF0000;
-		size_t size = 4096;
-		xbox::ntstatus_xt status = xbox::NtAllocateVirtualMemory(&base, 0, &size, XBOX_MEM_RESERVE | XBOX_MEM_COMMIT, XBOX_PAGE_EXECUTE_READWRITE);
-		if (status != 0) {
-			for (uintptr_t addr = 0x07F00000; addr >= 0x00100000; addr -= 0x00100000) {
-				base = (void*)addr;
-				size = 4096;
-				status = xbox::NtAllocateVirtualMemory(&base, 0, &size, XBOX_MEM_RESERVE | XBOX_MEM_COMMIT, XBOX_PAGE_EXECUTE_READWRITE);
-				if (status == 0) break;
-			}
-		}
-		if (status == 0) { // X_STATUS_SUCCESS is 0
-			s_trampolinePage = base;
-			EmuLogEx(CXBXR_MODULE::X86, LOG_LEVEL::INFO, "RunLLEHaloWorkaround: Allocated trampoline page using NtAllocateVirtualMemory at 0x%p", s_trampolinePage);
-		} else {
-			EmuLogEx(CXBXR_MODULE::X86, LOG_LEVEL::WARNING, "RunLLEHaloWorkaround: NtAllocateVirtualMemory failed (status=0x%08X). Trying VirtualAlloc...", status);
-			// Fallback to VirtualAlloc
-			s_trampolinePage = VirtualAlloc((void*)0x03FF0000, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-			if (!s_trampolinePage) {
-				for (uintptr_t addr = 0x03F00000; addr >= 0x00100000; addr -= 0x00100000) {
-					s_trampolinePage = VirtualAlloc((void*)addr, 4096, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-					if (s_trampolinePage) break;
-				}
-			}
-			if (s_trampolinePage) {
-				EmuLogEx(CXBXR_MODULE::X86, LOG_LEVEL::INFO, "RunLLEHaloWorkaround: Allocated trampoline page using fallback VirtualAlloc at 0x%p", s_trampolinePage);
-			} else {
-				EmuLogEx(CXBXR_MODULE::X86, LOG_LEVEL::ERROR2, "RunLLEHaloWorkaround: FAILED to allocate trampoline page!");
-			}
-		}
-
-		if (s_trampolinePage) {
-			const uint8_t trampoline_code[] = {
-				0x55,                               // push ebp
-				0x8B, 0xEC,                         // mov ebp, esp
-				0x8B, 0x45, 0x08,                   // mov eax, [ebp + 8]
-				0x85, 0xC0,                         // test eax, eax
-				0x74, 0x18,                         // jz +24
-				0x8B, 0x0D, 0x00, 0x60, 0xFD, 0x83, // mov ecx, [0x83FD6000]
-				0x8B, 0x90, 0x60, 0x2B, 0x00, 0x00, // mov edx, [eax + 0x2B60]
-				0x3B, 0xCA,                         // cmp ecx, edx
-				0x76, 0x02,                         // jbe +2
-				0x8B, 0xCA,                         // mov ecx, edx
-				0x89, 0x88, 0x18, 0x25, 0x00, 0x00, // mov [eax + 0x2518], ecx
-				0x8B, 0x55, 0x10,                   // mov edx, [ebp + 16]
-				0x85, 0xD2,                         // test edx, edx
-				0x74, 0x05,                         // jz +5
-				0x8B, 0x4D, 0x0C,                   // mov ecx, [ebp + 12]
-				0x89, 0x0A,                         // mov [edx], ecx
-				0x5D,                               // pop ebp
-				0xC3                                // ret
-			};
-			memcpy(s_trampolinePage, trampoline_code, sizeof(trampoline_code));
-		}
-	}
-
-	if (!s_trampolinePage) return;
-
-	// Update the trampoline's mov ecx, [addr] instruction with the current dynamic semaphore address
-	uint32_t* pTrampolineAddr = (uint32_t*)((uintptr_t)s_trampolinePage + 12);
-	if (*pTrampolineAddr != g_LLEHaloSemaphoreAddress) {
-		*pTrampolineAddr = g_LLEHaloSemaphoreAddress;
-	}
+	// Temp disable of the legacy assembly trampoline page allocation, etc.
+	// Instead, we use a clean universal C++ fence synchronization.
 
 	// Resolve D3D_g_pDevice
 	void* pDeviceGlobal = GetXboxSymbolPointer("D3D_g_pDevice");
@@ -1770,71 +1708,102 @@ void RunLLEHaloWorkaround()
 	if (pDeviceGlobal && !IsBadReadPtr(pDeviceGlobal, 4)) {
 		devAddr = *(uint32_t*)pDeviceGlobal;
 	}
-	uint32_t fallbackDevAddr = 0;
-	void* fallbackDeviceGlobal = (void*)0x001923A0;
-	if (!IsBadReadPtr(fallbackDeviceGlobal, 4)) {
-		fallbackDevAddr = *(uint32_t*)fallbackDeviceGlobal;
-	}
-	if (devAddr == 0 && fallbackDevAddr != 0) {
-		devAddr = fallbackDevAddr;
+	if (!devAddr) {
+		return;
 	}
 
-	static uint32_t s_logCountAll = 0;
-	s_logCountAll++;
-	if (s_logCountAll < 20 || s_logCountAll % 500 == 0) {
-		EmuLogInit(LOG_LEVEL::INFO, "RunLLEHaloWorkaround loop: s_logCountAll=%u, pDeviceGlobal=0x%p, devAddr=0x%08X, fallbackDevAddr=0x%08X",
-			s_logCountAll, pDeviceGlobal, devAddr, fallbackDevAddr);
+	// Read the dynamically updated semaphore address and value from NV2A PGRAPH
+	uint32_t lastReleasedFenceVal = 0;
+	if (g_LLEHaloSemaphoreAddress && !IsBadReadPtr((void*)(uintptr_t)g_LLEHaloSemaphoreAddress, 4)) {
+		lastReleasedFenceVal = *(uint32_t*)(uintptr_t)g_LLEHaloSemaphoreAddress;
 	}
 
-	// Resolve current DMA GET value
-	uint32_t dmaGetVal = 0;
-	extern NV2ADevice* g_NV2A;
-	if (g_NV2A) {
-		NV2AState* d = g_NV2A->GetDeviceState();
-		if (d && d->pfifo.regs) {
-			dmaGetVal = d->pfifo.regs[0x1270 / 4]; // NV_PFIFO_CACHE1_GET
+	// Determine the completed fence and current fence offsets based on game Title ID / SDK
+	uint32_t completedFenceAddr = 0;
+	uint32_t currentFenceVal = 0;
+
+	bool isHalo = false;
+	if (g_pCertificate) {
+		uint32_t titleId = g_pCertificate->dwTitleId;
+		if (titleId == 0x4D530002 || titleId == 0x4D530003 || titleId == 0x4D530004 || titleId == 0x4D530064) {
+			isHalo = true;
 		}
 	}
 
-	// Resolve the address stored in device[0x34]
-	uint32_t pDmaGet = 0;
-	if (devAddr && !IsBadReadPtr((void*)(devAddr + 0x34), 4)) {
-		pDmaGet = *(uint32_t*)(devAddr + 0x34);
-	}
-
-	// Call our trampoline!
-	if (devAddr || pDmaGet) {
-		typedef void (__cdecl *XboxWorkaroundFn)(uint32_t, uint32_t, uint32_t);
-		XboxWorkaroundFn fn = (XboxWorkaroundFn)s_trampolinePage;
-		fn(devAddr, dmaGetVal, pDmaGet);
-
-		// Rate-limited debugging to monitor values
-		static uint32_t s_logCount = 0;
-		s_logCount++;
-		if (s_logCount < 100 || s_logCount % 50 == 0) {
-			uint32_t semVal[8] = {0};
-			for (int i = 0; i < 8; i++) {
-				uint32_t addr = g_LLEHaloSemaphoreAddress + i * 4;
-				if (!IsBadReadPtr((void*)(uintptr_t)addr, 4)) {
-					semVal[i] = *(uint32_t*)(uintptr_t)addr;
+	if (isHalo) {
+		// Halo-specific offsets
+		completedFenceAddr = devAddr + 0x2518;
+		if (!IsBadReadPtr((void*)(devAddr + 0x2B60), 4)) {
+			currentFenceVal = *(uint32_t*)(devAddr + 0x2B60);
+		}
+	} else {
+		// Let's detect Blinx vs CS/GTA3/Spinx
+		// In Blinx: completed_fence pointer is at devAddr + 0x34, current_fence is at devAddr + 0x30
+		// In CS/GTA3/Spinx: completed_fence pointer is at devAddr + 0x30, current_fence is at devAddr + 0x2c
+		
+		// Safe probe:
+		// First try standard offset (CS, GTA3, Spinx, etc.):
+		uint32_t completedFencePtr = 0;
+		if (!IsBadReadPtr((void*)(devAddr + 0x30), 4)) {
+			completedFencePtr = *(uint32_t*)(devAddr + 0x30);
+		}
+		
+		if (completedFencePtr && !IsBadReadPtr((void*)completedFencePtr, 4)) {
+			completedFenceAddr = completedFencePtr;
+			if (!IsBadReadPtr((void*)(devAddr + 0x2C), 4)) {
+				currentFenceVal = *(uint32_t*)(devAddr + 0x2C);
+			}
+		} else {
+			// Try early offset (Blinx):
+			if (!IsBadReadPtr((void*)(devAddr + 0x34), 4)) {
+				completedFencePtr = *(uint32_t*)(devAddr + 0x34);
+			}
+			if (completedFencePtr && !IsBadReadPtr((void*)completedFencePtr, 4)) {
+				completedFenceAddr = completedFencePtr;
+				if (!IsBadReadPtr((void*)(devAddr + 0x30), 4)) {
+					currentFenceVal = *(uint32_t*)(devAddr + 0x30);
 				}
 			}
-			uint32_t devFence = 0;
-			if (devAddr && !IsBadReadPtr((void*)(devAddr + 0x2518), 4)) {
-				devFence = *(uint32_t*)(devAddr + 0x2518);
-			}
-			uint32_t currentFence = 0;
-			if (devAddr && !IsBadReadPtr((void*)(devAddr + 0x2B60), 4)) {
-				currentFence = *(uint32_t*)(devAddr + 0x2B60);
-			}
-			uint32_t cachedDmaGet = 0;
-			if (pDmaGet && !IsBadReadPtr((void*)pDmaGet, 4)) {
-				cachedDmaGet = *(uint32_t*)pDmaGet;
-			}
-			EmuLogInit(LOG_LEVEL::INFO, "HaloWorkaround: count=%u, devAddr=0x%08X (completed_fence=0x%X, current_fence=0x%X), sem=[0x%X,0x%X,0x%X,0x%X,0x%X,0x%X,0x%X,0x%X], dmaGetReg=0x%X, pDmaGet=0x%08X (*pDmaGet=0x%X)",
-				s_logCount, devAddr, devFence, currentFence,
-				semVal[0], semVal[1], semVal[2], semVal[3], semVal[4], semVal[5], semVal[6], semVal[7],
-				dmaGetVal, pDmaGet, cachedDmaGet);
 		}
 	}
+
+	// Update the completed fence value matching the exact trampoline logic
+	if (completedFenceAddr && !IsBadReadPtr((void*)completedFenceAddr, 4)) {
+		if (lastReleasedFenceVal > currentFenceVal) {
+			lastReleasedFenceVal = currentFenceVal;
+		}
+		*(uint32_t*)completedFenceAddr = lastReleasedFenceVal;
+	}
+
+	// Also update DMA GET pointer if requested
+	uint32_t pDmaGet = 0;
+	if (!IsBadReadPtr((void*)(devAddr + 0x34), 4)) {
+		pDmaGet = *(uint32_t*)(devAddr + 0x34);
+	}
+	if (pDmaGet && !IsBadReadPtr((void*)pDmaGet, 4)) {
+		// Resolve current DMA GET value from NV2A registers
+		extern NV2ADevice* g_NV2A;
+		if (g_NV2A) {
+			NV2AState* d = g_NV2A->GetDeviceState();
+			if (d && d->pfifo.regs) {
+				uint32_t dmaGetVal = d->pfifo.regs[0x1270 / 4]; // NV_PFIFO_CACHE1_GET
+				if (dmaGetVal) {
+					*(uint32_t*)pDmaGet = dmaGetVal;
+				}
+			}
+		}
+	}
+
+	// Rate-limited debugging to monitor values
+	static uint32_t s_logCount = 0;
+	s_logCount++;
+	if (s_logCount < 20 || s_logCount % 200 == 0) {
+		uint32_t devFence = 0;
+		if (completedFenceAddr && !IsBadReadPtr((void*)completedFenceAddr, 4)) {
+			devFence = *(uint32_t*)completedFenceAddr;
+		}
+		EmuLogInit(LOG_LEVEL::INFO, "UniversalFenceSync: count=%u, devAddr=0x%08X (completed_fence=0x%X, current_fence=0x%X), lastReleased=0x%X",
+			s_logCount, devAddr, devFence, currentFenceVal, lastReleasedFenceVal);
+	}
 }
+

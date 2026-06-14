@@ -42,10 +42,13 @@ typedef struct RAMHTEntry {
 } RAMHTEntry;
 
 #include "core\hle\D3D8\Rendering\Backend\Backend_D3D11_Profiler.h"
+#include "common/Timer.h"
+#include <thread>
 
 static RAMHTEntry ramht_lookup(NV2AState *d, uint32_t handle); // forward declaration
 static bool pfifo_run_puller(NV2AState *d); // forward declaration
 static void pfifo_run_pusher(NV2AState *d); // forward declaration
+static void pfifo_throttle(NV2AState* d, uint64_t cycles);
 
 /* PFIFO - MMIO and DMA FIFO submission to PGRAPH and VPE */
 DEVICE_READ32(PFIFO)
@@ -182,6 +185,9 @@ static bool pfifo_run_puller(NV2AState *d)
 
         uint32_t method = method_entry & 0x1FFC;
         uint32_t subchannel = GET_MASK(method_entry, NV_PFIFO_CACHE1_METHOD_SUBCHANNEL);
+
+        d->pfifo.cycles += 16;
+        pfifo_throttle(d, d->pfifo.cycles);
 
         // Process pushbuffer methods into PGRAPH register state.
         // Skip object binding (method 0) — Xbox uses a single channel.
@@ -509,6 +515,30 @@ void pfifo_flush_to_pgraph(NV2AState *d)
     qemu_mutex_unlock(&d->pfifo.pfifo_lock);
 }
 
+static void pfifo_throttle(NV2AState* d, uint64_t cycles)
+{
+	uint64_t cpu_tsc = CxbxGetPerformanceCounter(false);
+
+	// Prevent credit build-up if the pusher has fallen too far behind (e.g. > 10ms behind)
+	if (cpu_tsc > d->pfifo.cycles + 7333333) {
+		d->pfifo.cycles = cpu_tsc;
+		return;
+	}
+
+	if (cycles > cpu_tsc) {
+		uint64_t diff_cycles = cycles - cpu_tsc;
+		// Throttle if we are ahead by more than ~2,000,000 cycles (~2.7 ms) to avoid thread scheduling overhead
+		if (diff_cycles > 2000000) {
+			int64_t qpc_delta = (diff_cycles * HostQPCFrequency) / XBOX_TSC_FREQUENCY;
+			LARGE_INTEGER now;
+			QueryPerformanceCounter(&now);
+			SleepPrecise(now.QuadPart + qpc_delta);
+		} else if (diff_cycles > 100000) { // ~136 µs
+			std::this_thread::yield();
+		}
+	}
+}
+
 static void pfifo_run_pusher(NV2AState *d)
 {
     uint32_t *push0 = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
@@ -574,6 +604,9 @@ static void pfifo_run_pusher(NV2AState *d)
 
         uint32_t word = ldl_le_p((uint32_t*)(dma + dma_get_v));
         dma_get_v += 4;
+
+        d->pfifo.cycles += 16;
+        pfifo_throttle(d, d->pfifo.cycles);
 
         uint32_t method_type =
             GET_MASK(*dma_state, NV_PFIFO_CACHE1_DMA_STATE_METHOD_TYPE);

@@ -473,6 +473,7 @@ typedef struct NV2AState {
 		// is drained (LOW_MARK set) and the pusher has no pending DMA data.
 		bool flush_requested;
 		QemuCond flush_complete_cond;
+		uint64_t cycles; // Simulated 733MHz CPU clock cycles processed by pusher
     } pfifo;
 
     struct {
