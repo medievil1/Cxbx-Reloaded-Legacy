@@ -29,7 +29,7 @@
 #include "../PCIDevice.h" // For PCIDevice
 
 // NVNET Register Definitions
-// Taken from XQEMU
+// Originally based on XQEMU, significantly reworked.
 enum {
 	NvRegIrqStatus = 0x000,
 #       define NVREG_IRQSTAT_BIT1     0x002

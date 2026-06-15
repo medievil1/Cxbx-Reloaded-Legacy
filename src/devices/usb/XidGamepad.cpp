@@ -25,8 +25,7 @@
 // *
 // ******************************************************************
 
-// Acknowledgment: XQEMU xid emulation (GPLv2)
-// https://xqemu.com/
+// Originally based on XQEMU xid emulation (GPLv2), significantly reworked.
 
 /*
 * QEMU USB XID Devices
@@ -217,7 +216,6 @@ XboxDeviceState* XidGamepad::ClassInitFn()
 	XboxDeviceState* dev = &m_XidState->dev;
 
 	dev->ProductDesc = "Microsoft Xbox Controller";
-	QLIST_INIT(&dev->Strings);
 	dev->klass = m_pPeripheralFuncStruct;
 
 	{

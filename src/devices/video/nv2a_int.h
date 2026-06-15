@@ -1,7 +1,8 @@
-// Source : https://github.com/xqemu/xqemu/blob/master/hw/xbox/nv2a_int.h
 /*
- * QEMU Geforce NV2A internal definitions
+ * Cxbx-Reloaded NV2A internal definitions
  *
+ * Originally based on code from XQEMU (https://github.com/xqemu/xqemu),
+ * significantly reworked.
  * Copyright (c) 2012 espes
  * Copyright (c) 2015 Jannik Vogel
  * Copyright (c) 2018 Matt Borgerson
@@ -23,8 +24,6 @@
 #ifndef HW_NV2A_INT_H
 #define HW_NV2A_INT_H
 
-#undef USE_SHADER_CACHE
-
 #include <queue>
 #include <thread>
 #include <cstdint>
@@ -32,11 +31,7 @@
 
 #include "xbox_types.h" // For xbox::addr_xt
 
-#include "qemu-thread.h" // For qemu_mutex, etc
-
-#ifdef USE_SHADER_CACHE
-#include "glib_compat.h" // For GHashTable, g_hash_table_new, g_hash_table_lookup, g_hash_table_insert
-#endif
+#include "host_sync.h"
 
 #include "swizzle.h"
 
@@ -44,8 +39,8 @@
 #include "nv2a_regs.h" // For NV2A_MAX_TEXTURES, etc
 
 
-typedef xbox::addr_xt hwaddr; // Compatibility; Cxbx uses xbox::addr_xt, xqemu and OpenXbox use hwaddr 
-typedef uint32_t value_t; // Compatibility; Cxbx values are uint32_t (xqemu and OpenXbox use uint64_t)
+// xbox::addr_xt and value_t typedefs were removed in the QEMU dependency cleanup.
+// Use xbox::addr_xt and uint32_t directly.
 
 // Register index: convert MMIO byte offset to uint32_t array index
 #define RI(byte_offset) ((byte_offset) >> 2)
@@ -141,8 +136,8 @@ static int ffs(int valu)
 #define NV2A_DEVICE(obj) \
     OBJECT_CHECK(NV2AState, (obj), "nv2a")
 
-//void reg_log_read(int block, hwaddr addr, uint64_t val);
-//void reg_log_write(int block, hwaddr addr, uint64_t val);
+//void reg_log_read(int block, xbox::addr_xt addr, uint64_t val);
+//void reg_log_write(int block, xbox::addr_xt addr, uint64_t val);
 
 enum FIFOEngine {
 	ENGINE_SOFTWARE = 0,
@@ -323,11 +318,11 @@ struct NV2ASurfaceState {
 };
 
 typedef struct PGRAPHState {
-	QemuMutex pgraph_lock;
+	HostMutex pgraph_lock;
 
-	uint32_t pending_interrupts;
-	uint32_t enabled_interrupts;
-	QemuCond interrupt_cond;
+	std::atomic<uint32_t> pending_interrupts{0};
+	std::atomic<uint32_t> enabled_interrupts{0};
+	HostCond interrupt_cond;
 
 	/* subchannels state we're not sure the location of... */
 	ContextSurfaces2DState context_surfaces_2d;
@@ -335,8 +330,8 @@ typedef struct PGRAPHState {
 	KelvinState kelvin;
 	BetaState beta;
 
-	QemuCond fifo_access_cond;
-	QemuCond flip_3d;
+	HostCond fifo_access_cond;
+	HostCond flip_3d;
 
 	Surface surface_color, surface_zeta;
 	NV2ASurfaceState surface_state;
@@ -367,7 +362,8 @@ typedef struct PGRAPHState {
 	// Dirty generation counters indexed by NV2ADirtyGroup.  Bumped by
 	// nv097_dispatch_method and PGRAPH switch handlers; each consumer
 	// independently tracks its own "last seen" value per group.
-	uint32_t dirty[NV2A_DIRTY_COUNT];
+	// Atomic for lock-free read from threads holding shared pgraph_lock.
+	std::atomic<uint32_t> dirty[NV2A_DIRTY_COUNT];
 
 	// Light geometry — SRAM bank unknown (xemu: "should figure out where
 	// these are in lighting context").  Packed contiguously for data-driven
@@ -413,10 +409,10 @@ typedef struct OverlayState {
 	int pitch;
 	bool is_transparent;
 #ifdef DEBUG
-	hwaddr base;
-	hwaddr limit;
+	xbox::addr_xt base;
+	xbox::addr_xt limit;
 #endif
-	hwaddr offset;
+	xbox::addr_xt offset;
 	uint32_t in_height;
 	uint32_t in_width;
 	int out_x;
@@ -473,23 +469,16 @@ typedef struct NV2AState {
         uint32_t pending_interrupts;
         uint32_t enabled_interrupts;
 		uint32_t* regs; // Backed by g_pNV2AMMIO + NV2A_MMIO_OFF_PFIFO
-		QemuMutex pfifo_lock;
+		HostMutex pfifo_lock;
 		std::thread puller_thread;
 		HANDLE puller_event;  // Auto-reset event to wake the puller thread
-		std::thread pusher_thread;
-		QemuCond pusher_cond;
-		// Flush synchronization: HLE thread signals flush_requested, then
-		// waits on flush_complete_cond.  The puller signals back when CACHE1
-		// is drained (LOW_MARK set) and the pusher has no pending DMA data.
-		bool flush_requested;
-		QemuCond flush_complete_cond;
 		uint64_t cycles; // Simulated 733MHz CPU clock cycles processed by pusher
     } pfifo;
 
     struct {
 		uint32_t pending_interrupts;
 		uint32_t enabled_interrupts;
-		//QemuCond interrupt_cond; // pvideo.interrupt_cond not used (yet)
+		//HostCond interrupt_cond; // pvideo.interrupt_cond not used (yet)
 		OverlayState overlays[2]; // NV2A supports 2 video overlays
 		uint32_t* regs; // Backed by g_pNV2AMMIO + NV2A_MMIO_OFF_PVIDEO
     } pvideo;
@@ -512,7 +501,7 @@ typedef struct NV2AState {
     struct {
         uint32_t pending_interrupts;
         uint32_t enabled_interrupts;
-        hwaddr start;
+        xbox::addr_xt start;
         uint32_t vblank_count; // Incremented each VBlank; bit 0 determines interlace field (even/odd)
         uint32_t last_present_vblank; // VBlank count at last present (prevents double-present)
 		uint32_t* regs; // Backed by g_pNV2AMMIO + NV2A_MMIO_OFF_PCRTC
@@ -552,14 +541,6 @@ typedef struct NV2AState {
 		uint8_t misc_output; /* Misc Output Register */
 	} prmvio;
 } NV2AState;
-
-typedef value_t(*read_func)(NV2AState *d, hwaddr addr); //, unsigned int size);
-typedef void(*write_func)(NV2AState *d, hwaddr addr, value_t val); //, unsigned int size);
-
-typedef struct {
-	read_func read;
-	write_func write;
-} MemoryRegionOps;
 
 #if 0
 // Valid after PCI init :

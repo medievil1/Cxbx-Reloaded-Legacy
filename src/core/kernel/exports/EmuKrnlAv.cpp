@@ -72,33 +72,37 @@ void REG_WR32(void* Ptr, xbox::ulong_xt Addr, xbox::ulong_xt Val)
 void CRTC_WR(void* Ptr, xbox::uchar_xt i, xbox::uchar_xt d)
 {
 	static const NV2ABlockInfo* block = EmuNV2A_Block(NV_PRMCIO_CRX__COLOR);
+	NV2AState* d_state = g_NV2A->GetDeviceState();
 
-	g_NV2A->BlockWrite(block, NV_PRMCIO_CRX__COLOR, i, sizeof(uint8_t));
-	g_NV2A->BlockWrite(block, NV_PRMCIO_CR__COLOR, d, sizeof(uint8_t));
+	block->write(d_state, NV_PRMCIO_CRX__COLOR - block->offset, i);
+	block->write(d_state, NV_PRMCIO_CR__COLOR - block->offset, d);
 }
 
 void SRX_WR(void *Ptr, xbox::uchar_xt i, xbox::uchar_xt d)
 {
 	static const NV2ABlockInfo* block = EmuNV2A_Block(NV_PRMVIO_SRX);
+	NV2AState* d_state = g_NV2A->GetDeviceState();
 
-	g_NV2A->BlockWrite(block, NV_PRMVIO_SRX, i, sizeof(uint8_t));
-	g_NV2A->BlockWrite(block, NV_PRMVIO_SR, d, sizeof(uint8_t));
+	block->write(d_state, NV_PRMVIO_SRX - block->offset, i);
+	block->write(d_state, NV_PRMVIO_SR - block->offset, d);
 }
 
 void GRX_WR(void *Ptr, xbox::uchar_xt i, xbox::uchar_xt d)
 {
 	static const NV2ABlockInfo* block = EmuNV2A_Block(NV_PRMVIO_GRX);
+	NV2AState* d_state = g_NV2A->GetDeviceState();
 
-	g_NV2A->BlockWrite(block, NV_PRMVIO_GRX, i, sizeof(uint8_t));
-	g_NV2A->BlockWrite(block, NV_PRMVIO_GX, d, sizeof(uint8_t));
+	block->write(d_state, NV_PRMVIO_GRX - block->offset, i);
+	block->write(d_state, NV_PRMVIO_GX - block->offset, d);
 }
 
 void ARX_WR(void *Ptr, xbox::uchar_xt i, xbox::uchar_xt d)
 {
 	static const NV2ABlockInfo* block = EmuNV2A_Block(NV_PRMCIO_ARX);
+	NV2AState* d_state = g_NV2A->GetDeviceState();
 
-	g_NV2A->BlockWrite(block, NV_PRMCIO_ARX, i, sizeof(uint8_t));
-	g_NV2A->BlockWrite(block, NV_PRMCIO_ARX, d, sizeof(uint8_t));
+	block->write(d_state, NV_PRMCIO_ARX - block->offset, i);
+	block->write(d_state, NV_PRMCIO_ARX - block->offset, d);
 }
 
 ULONG AvSMCVideoModeToAVPack(ULONG VideoMode)

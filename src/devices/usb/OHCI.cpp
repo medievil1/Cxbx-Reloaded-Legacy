@@ -25,8 +25,7 @@
 // *
 // ******************************************************************
 
-// Acknowledgment: QEMU ohci subsystem as used in XQEMU (GPLv2)
-// https://xqemu.com/
+// Originally based on the QEMU OHCI subsystem (GPLv2), significantly reworked.
 
 /*
 * QEMU USB OHCI Emulation

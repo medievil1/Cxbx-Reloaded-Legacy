@@ -21,8 +21,8 @@
 // *
 // *  (c) 2002-2003 Aaron Robinson <caustik@caustik.com>
 // * 
-// *  This file is heavily based on code from XQEMU
-// *  https://github.com/xqemu/xqemu/blob/master/hw/xbox/nv2a/nv2a.c
+// *  Originally based on code from XQEMU
+// *  (https://github.com/xqemu/xqemu), significantly reworked.
 // *  Copyright (c) 2012 espes
 // *  Copyright (c) 2015 Jannik Vogel
 // *  Copyright (c) 2018 Matt Borgerson
@@ -64,76 +64,43 @@
 #include "core\hle\D3D8\Rendering\Backend\Backend_D3D11_Profiler.h"
 #include <cassert>
 
-// glib types
-typedef char gchar;
-typedef int gint;
-typedef unsigned int guint;
-typedef unsigned int guint32;
-typedef const void *gconstpointer;
-typedef gint   gboolean;
-typedef void* gpointer;
-
-typedef guint32 GQuark;
-
-typedef struct _GError GError;
-
-struct _GError
+// Cached IRQ summary: bitmask of sub-units with at least one pending+enabled interrupt.
+// Re-computed each call; used by PMC_INTR_0 read handler and external ISR queries.
+static uint32_t update_irq(NV2AState *d)
 {
-	GQuark       domain;
-	gint         code;
-	gchar       *message;
-};
-
-static void update_irq(NV2AState *d)
-{
-	/* PGRAPH - Auto-ack CONTEXT_SWITCH only. The PULLER thread uses
-	 * CONTEXT_SWITCH as an internal synchronization mechanism and waits on
-	 * interrupt_cond for the ack. We auto-ack it here because the Xbox
-	 * miniport ISR may not handle it properly. Other PGRAPH interrupts
-	 * (ERROR, NOTIFY) must route through the real ISR so that
-	 * D3DDevice_InsertCallback works correctly. */
+	// PGRAPH: auto-ack CONTEXT_SWITCH (internal synchronization mechanism for the
+	// puller thread).  Other PGRAPH interrupts (ERROR, NOTIFY) must route through
+	// the real ISR so that D3DDevice_InsertCallback works correctly.
 	if (d->pgraph.pending_interrupts & NV_PGRAPH_INTR_CONTEXT_SWITCH) {
 		d->pgraph.pending_interrupts &= ~NV_PGRAPH_INTR_CONTEXT_SWITCH;
-		qemu_cond_broadcast(&d->pgraph.interrupt_cond);
+		host_cond_broadcast(&d->pgraph.interrupt_cond);
 	}
 
-	/* Compute live PMC interrupt status from sub-units.
-	 * PMC_INTR_0 on real NV2A is a read-only register that reflects live
-	 * sub-unit status. We don't need to cache pmc.pending_interrupts for
-	 * read purposes (the READ handler computes it live), but we still
-	 * need to know if anything is pending for Assert(true/false). */
-	bool any_pending = false;
-	if (d->pfifo.pending_interrupts & d->pfifo.enabled_interrupts)
-		any_pending = true;
-	if (d->pgraph.pending_interrupts & d->pgraph.enabled_interrupts)
-		any_pending = true;
-	if (d->pcrtc.pending_interrupts & d->pcrtc.enabled_interrupts)
-		any_pending = true;
-	if (d->pvideo.pending_interrupts & d->pvideo.enabled_interrupts)
-		any_pending = true;
-	if (d->ptimer.pending_interrupts & d->ptimer.enabled_interrupts)
-		any_pending = true;
+	// Compute live PMC interrupt status from sub-units.
+	// PMC_INTR_0 reflects live sub-unit status (read-only on real NV2A).
+	uint32_t summary = 0;
+	if (d->pfifo.pending_interrupts & d->pfifo.enabled_interrupts)  summary |= 1 << 0;
+	if (d->pgraph.pending_interrupts & d->pgraph.enabled_interrupts) summary |= 1 << 1;
+	if (d->pcrtc.pending_interrupts & d->pcrtc.enabled_interrupts)  summary |= 1 << 2;
+	if (d->pvideo.pending_interrupts & d->pvideo.enabled_interrupts) summary |= 1 << 3;
+	if (d->ptimer.pending_interrupts & d->ptimer.enabled_interrupts) summary |= 1 << 4;
 
-	if (any_pending && d->pmc.enabled_interrupts) {
+	if (summary && d->pmc.enabled_interrupts) {
 		HalSystemInterrupts[3].Assert(true);
-		// Wake the DPC thread so it can fire the ISR for non-VBlank
-		// interrupts (e.g. PGRAPH INTR_ERROR from D3DDevice_InsertCallback).
 		extern void KeSignalVBlankPending();
 		KeSignalVBlankPending();
-	}
-	else {
+	} else {
 		HalSystemInterrupts[3].Assert(false);
-		// PGRAPH INTR_ERROR (InsertCallback) stalls the GPU pipeline on real
-		// hardware until the CPU acknowledges it. If the ISR temporarily
-		// disabled NV_PMC_INTR_EN_0 (standard ISR prologue), we still need
-		// the DPC thread awake to re-fire the ISR once PMC is re-enabled.
-		// Without this, the puller blocks forever waiting for an ack that
-		// never comes because the DPC thread is asleep.
+		// PGRAPH INTR_ERROR (InsertCallback) stalls the GPU pipeline until the
+		// CPU acks it.  If PMC interrupts are currently masked (ISR prologue),
+		// wake the DPC thread anyway so it re-fires once PMC is re-enabled.
 		if (d->pgraph.pending_interrupts & NV_PGRAPH_INTR_ERROR) {
 			extern void KeSignalVBlankPending();
 			KeSignalVBlankPending();
 		}
 	}
+
+	return summary;
 }
 
 
@@ -157,29 +124,14 @@ static void update_irq(NV2AState *d)
 #define DEVICE_WRITE32_REG(dev) d->dev.regs[RI(addr)] = value
 #define DEVICE_WRITE32_END(DEV) DEBUG_WRITE32(DEV)
 
-static inline uint32_t ldl_le_p(const void *p)
-{
-	return *(uint32_t*)p;
-}
-
-static inline void stq_le_p(uint64_t *p, uint64_t v)
-{
-	*p = v;
-}
-
-static inline void stl_le_p(uint32_t *p, uint32_t v)
-{
-	*p = v;
-}
-
 static DMAObject nv_dma_load(NV2AState *d, xbox::addr_xt dma_obj_address)
 {
 	assert(dma_obj_address < d->pramin.ramin_size);
 
 	uint32_t *dma_obj = (uint32_t*)(d->pramin.ramin_ptr + dma_obj_address);
-	uint32_t flags = ldl_le_p(dma_obj);
-	uint32_t limit = ldl_le_p(dma_obj + 1);
-	uint32_t frame = ldl_le_p(dma_obj + 2);
+	uint32_t flags = *dma_obj;
+	uint32_t limit = *(dma_obj + 1);
+	uint32_t frame = *(dma_obj + 2);
 
 	DMAObject object;
 	object.dma_class = GET_MASK(flags, NV_DMA_CLASS);
@@ -214,8 +166,8 @@ uint32_t NV2ADevice::ResolveDmaBaseAddress(NV2AState *d, xbox::addr_xt dma_obj_a
 		return 0;
 
 	uint32_t *dma_obj = (uint32_t*)(d->pramin.ramin_ptr + dma_obj_address);
-	uint32_t flags = ldl_le_p(dma_obj);
-	uint32_t frame = ldl_le_p(dma_obj + 2);
+	uint32_t flags = *dma_obj;
+	uint32_t frame = *(dma_obj + 2);
 	uint32_t address = (frame & NV_DMA_ADDRESS) | GET_MASK(flags, NV_DMA_ADJUST);
 	return address & 0x07FFFFFF; // Mask to 128 MB physical address space
 }
@@ -249,19 +201,19 @@ const NV2ABlockInfo regions[] = { // blocktable
 #define ENTRY(OFFSET, SIZE, NAME) \
 	{ \
         #NAME, OFFSET, SIZE, \
-        { DEVICE_READ32_NAME(NAME), DEVICE_WRITE32_NAME(NAME) }, \
+        DEVICE_READ32_NAME(NAME), DEVICE_WRITE32_NAME(NAME), \
     }, \
 
 #define ENTRY_MIRROR(OFFSET, SIZE, NAME, MIRROR) \
 	{ \
         #NAME, OFFSET, SIZE, \
-        { DEVICE_READ32_NAME(MIRROR), DEVICE_WRITE32_NAME(MIRROR) }, \
+        DEVICE_READ32_NAME(MIRROR), DEVICE_WRITE32_NAME(MIRROR), \
     }, \
-	
+
 #define ENTRY_END(OFFSET, SIZE, NAME) \
 	{ \
         #NAME, OFFSET, SIZE, \
-        { nullptr, nullptr }, \
+        nullptr, nullptr, \
     }, \
 
 	/* card master control */
@@ -313,22 +265,27 @@ const NV2ABlockInfo regions[] = { // blocktable
 #undef ENTRY_END
 };
 
+// Page table: maps each 4 KB MMIO page (16 MiB / 4 KiB = 4096 entries) to its block info.
+// Populated at init from regions[] for O(1) address→block lookup.
+static const NV2ABlockInfo* s_mmioPageTable[4096];
+
+static void CxbxInitMMIOPageTable()
+{
+    for (auto& r : regions) {
+        if (r.size == 0) break;
+        xbox::addr_xt end = r.offset + r.size;
+        for (xbox::addr_xt page = r.offset; page < end; page += 0x1000) {
+            if ((page >> 12) < 4096) {
+                s_mmioPageTable[page >> 12] = &r;
+            }
+        }
+    }
+}
+
 const NV2ABlockInfo* EmuNV2A_Block(xbox::addr_xt addr)
 {
-	FUNC_PROFILE("NV2ABlock");
-	// Find the block in the block table
-	const NV2ABlockInfo* block = &regions[0];
-	int i = 0;
-
-	while (block->size > 0) {
-		if (addr >= block->offset && addr < block->offset + block->size) {
-			return block;
-		}
-
-		block = &regions[++i];
-	}
-
-	return nullptr;
+    if (addr >= 0x1000000) return nullptr;
+    return s_mmioPageTable[addr >> 12];
 }
 
 void NV2ADevice::UpdateHostDisplay(NV2AState *d)
@@ -476,6 +433,7 @@ void NV2ADevice::Init()
 	NV2AState *d = m_nv2a_state; // glue
 
 	CxbxReserveNV2AMemory(d);
+	CxbxInitMMIOPageTable();
 
 	d->pcrtc.start = 0;
 
@@ -505,11 +463,8 @@ void NV2ADevice::Init()
 	d->vblank_period = HostQPCFrequency * 16667 / 1000000;
 	d->vblank_cb = nv2a_vblank_interrupt;
 
-    qemu_mutex_init(&d->pfifo.pfifo_lock);
+    host_mutex_init(&d->pfifo.pfifo_lock);
     d->pfifo.puller_event = CreateEvent(NULL, FALSE, FALSE, NULL); // auto-reset
-    qemu_cond_init(&d->pfifo.pusher_cond);
-    qemu_cond_init(&d->pfifo.flush_complete_cond);
-    d->pfifo.flush_requested = false;
 
     d->pfifo.regs[RI(NV_PFIFO_CACHE1_STATUS)] |= NV_PFIFO_CACHE1_STATUS_LOW_MARK;
 
@@ -559,7 +514,6 @@ void NV2ADevice::StartFifoThreads()
 {
 	NV2AState *d = m_nv2a_state;
 	d->pfifo.puller_thread = std::thread(pfifo_puller_thread, d);
-	d->pfifo.pusher_thread = std::thread(pfifo_pusher_thread, d);
 }
 
 void NV2ADevice::Reset()
@@ -570,14 +524,9 @@ void NV2ADevice::Reset()
 	d->exiting = true;
 
 	SetEvent(d->pfifo.puller_event);
-	qemu_mutex_lock(&d->pfifo.pfifo_lock);
-	qemu_cond_broadcast(&d->pfifo.pusher_cond);
-	qemu_cond_broadcast(&d->pfifo.flush_complete_cond);
-	qemu_mutex_unlock(&d->pfifo.pfifo_lock);
 	d->pfifo.puller_thread.join();
-	d->pfifo.pusher_thread.join();
 	CloseHandle(d->pfifo.puller_event);
-	qemu_mutex_destroy(&d->pfifo.pfifo_lock); // Cxbxr addition
+	host_mutex_destroy(&d->pfifo.pfifo_lock); // Cxbxr addition
 
 	pgraph_destroy(&d->pgraph);
 }
@@ -591,43 +540,23 @@ void NV2ADevice::IOWrite(int barIndex, uint32_t port, uint32_t value, unsigned s
 {
 }
 
-uint32_t NV2ADevice::BlockRead(const NV2ABlockInfo* block, uint32_t addr, unsigned size)
-{
-	switch (size) {
-	case sizeof(uint8_t) : {
-		char name[64];
-		snprintf(name, sizeof(name), "NV2ARd-%s", block->name ? block->name : "?");
-		FUNC_PROFILE(name);
-		return block->ops.read(m_nv2a_state, addr - block->offset) & 0xFF;
-	}
-	case sizeof(uint16_t) : {
-		assert((addr & 1) == 0);
-		char name[64];
-		snprintf(name, sizeof(name), "NV2ARd-%s", block->name ? block->name : "?");
-		FUNC_PROFILE(name);
-		return block->ops.read(m_nv2a_state, addr - block->offset) & 0xFFFF;
-	}
-	case sizeof(uint32_t) : {
-		assert((addr & 3) == 0);
-		char name[64];
-		snprintf(name, sizeof(name), "NV2ARd-%s", block->name ? block->name : "?");
-		FUNC_PROFILE(name);
-		return block->ops.read(m_nv2a_state, addr - block->offset);
-	}
-	default:
-		assert(false);
-		return 0;
-	}
-}
-
 uint32_t NV2ADevice::MMIORead(int barIndex, uint32_t addr, unsigned size)
 { 
 	switch (barIndex) {
 	case 0: {
 		// Access NV2A regardless of HLE/LLE mode
 		const NV2ABlockInfo* block = EmuNV2A_Block(addr);
-		if (block != nullptr) {
-			return BlockRead(block, addr, size);
+		if (block != nullptr && block->read) {
+			char name[64];
+			snprintf(name, sizeof(name), "NV2ARd-%s", block->name ? block->name : "?");
+			FUNC_PROFILE(name);
+			uint32_t val = block->read(m_nv2a_state, addr - block->offset);
+			switch (size) {
+			case sizeof(uint8_t):  return val & 0xFF;
+			case sizeof(uint16_t): return val & 0xFFFF;
+			case sizeof(uint32_t): return val;
+			default: assert(false); return 0;
+			}
 		}
 		break;
 	}
@@ -641,76 +570,39 @@ uint32_t NV2ADevice::MMIORead(int barIndex, uint32_t addr, unsigned size)
 	return 0;
 }
 
-void NV2ADevice::BlockWrite(const NV2ABlockInfo* block, uint32_t addr, uint32_t value, unsigned size)
-{
-	switch (size) {
-	case sizeof(uint8_t) : {
-#if 0
-		xbox::addr_xt aligned_addr;
-		uint32_t aligned_value;
-		int shift;
-		uint32_t mask;
-
-		aligned_addr = addr & ~3;
-		aligned_value = block->ops.read(m_nv2a_state, aligned_addr - block->offset);
-		shift = (addr & 3) * 8;
-		mask = 0xFF << shift;
-		block->ops.write(m_nv2a_state, aligned_addr - block->offset, (aligned_value & ~mask) | (value << shift));
-#else
-		{
-			char name[64];
-			snprintf(name, sizeof(name), "NV2AWr-%s", block->name ? block->name : "?");
-			FUNC_PROFILE(name);
-			block->ops.write(m_nv2a_state, addr - block->offset, value);
-		}
-#endif
-		return;
-	}
-	case sizeof(uint16_t) : {
-		assert((addr & 1) == 0); // TODO : What if this fails?
-
-		xbox::addr_xt aligned_addr;
-		uint32_t aligned_value;
-		int shift;
-		uint32_t mask;
-
-		aligned_addr = addr & ~3;
-		aligned_value = block->ops.read(m_nv2a_state, aligned_addr - block->offset);
-		shift = (addr & 2) * 16;
-		mask = 0xFFFF << shift;
-		{
-			char name[64];
-			snprintf(name, sizeof(name), "NV2AWr-%s", block->name ? block->name : "?");
-			FUNC_PROFILE(name);
-			block->ops.write(m_nv2a_state, aligned_addr - block->offset, (aligned_value & ~mask) | (value << shift));
-		}
-		return;
-	}
-	case sizeof(uint32_t) :
-		assert((addr & 3) == 0); // TODO : What if this fails?	
-
-		{
-			char name[64];
-			snprintf(name, sizeof(name), "NV2AWr-%s", block->name ? block->name : "?");
-			FUNC_PROFILE(name);
-			block->ops.write(m_nv2a_state, addr - block->offset, value);
-		}
-		return;
-	}
-}
-
 void NV2ADevice::MMIOWrite(int barIndex, uint32_t addr, uint32_t value, unsigned size)
 {
 	switch (barIndex) {
 	case 0: {
 		// Access NV2A regardless of HLE/LLE mode
 		const NV2ABlockInfo* block = EmuNV2A_Block(addr);
-
-		if (block != nullptr) {
-			BlockWrite(block, addr, value, size);
-			return;
+		if (block != nullptr && block->write) {
+			char name[64];
+			snprintf(name, sizeof(name), "NV2AWr-%s", block->name ? block->name : "?");
+			FUNC_PROFILE(name);
+			switch (size) {
+			case sizeof(uint8_t):
+				block->write(m_nv2a_state, addr - block->offset, value);
+				return;
+			case sizeof(uint16_t): {
+				assert((addr & 1) == 0);
+				xbox::addr_xt aligned_addr = addr & ~3;
+				uint32_t aligned_value = block->read(m_nv2a_state, aligned_addr - block->offset);
+				int shift = (addr & 2) * 16;
+				uint32_t mask = 0xFFFF << shift;
+				block->write(m_nv2a_state, aligned_addr - block->offset,
+					(aligned_value & ~mask) | (value << shift));
+				return;
+			}
+			case sizeof(uint32_t):
+				assert((addr & 3) == 0);
+				block->write(m_nv2a_state, addr - block->offset, value);
+				return;
+			default:
+				assert(false);
+				return;
+			}
 		}
-
 		break;
 	}
 	case 1: {

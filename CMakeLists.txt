@@ -255,8 +255,6 @@ file (GLOB CXBXR_HEADER_EMU
  "${CXBXR_ROOT_DIR}/src/devices/video/nv2a_debug.h"
  "${CXBXR_ROOT_DIR}/src/devices/video/nv2a_int.h"
  "${CXBXR_ROOT_DIR}/src/devices/video/nv2a_regs.h"
- "${CXBXR_ROOT_DIR}/src/devices/video/qemu-thread.h"
- "${CXBXR_ROOT_DIR}/src/devices/video/queue.h"
  "${CXBXR_ROOT_DIR}/src/devices/video/swizzle.h"
  "${CXBXR_ROOT_DIR}/src/devices/video/vga.h"
  "${CXBXR_ROOT_DIR}/src/devices/x86/EmuX86.h"
@@ -472,7 +470,6 @@ file (GLOB CXBXR_SOURCE_EMU
 
  "${CXBXR_ROOT_DIR}/src/devices/video/nv2a.cpp"
  "${CXBXR_ROOT_DIR}/src/devices/video/nv2a_debug.cpp"
- "${CXBXR_ROOT_DIR}/src/devices/video/qemu-thread-win32.cpp"
  "${CXBXR_ROOT_DIR}/src/devices/video/swizzle.cpp"
  "${CXBXR_ROOT_DIR}/src/devices/x86/EmuX86.cpp"
  "${CXBXR_ROOT_DIR}/src/devices/Xbox.cpp"

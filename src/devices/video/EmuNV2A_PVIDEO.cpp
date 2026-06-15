@@ -19,8 +19,8 @@
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
 // *
-// *  This file is heavily based on code from XQEMU
-// *  https://github.com/xqemu/xqemu/blob/master/hw/xbox/nv2a/nv2a_pvideo.c
+// *  Originally based on code from XQEMU
+// *  (https://github.com/xqemu/xqemu), significantly reworked.
 // *  Copyright (c) 2012 espes
 // *  Copyright (c) 2015 Jannik Vogel
 // *  Copyright (c) 2018 Matt Borgerson
@@ -74,7 +74,7 @@ DEVICE_WRITE32(PVIDEO)
 	case NV_PVIDEO_INTR:
 		d->pvideo.pending_interrupts &= ~value;
 		update_irq(d);
-//		qemu_cond_broadcast(&d->pvideo.interrupt_cond);
+//		host_cond_broadcast(&d->pvideo.interrupt_cond);
 		break;
 	case NV_PVIDEO_INTR_EN:
 		d->pvideo.enabled_interrupts = value;

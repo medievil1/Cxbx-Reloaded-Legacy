@@ -26,8 +26,7 @@
 // ******************************************************************
 
 // Acknowledgment: Muldiv64 is from qemu-common.h which doesn't have a license header, iovector functions are from iov.c file.
-// Both files were originally taken from XQEMU (GPLv2)
-// https://xqemu.com/
+// Originally based on XQEMU (GPLv2), significantly reworked.
 
 /*
 * Helpers for getting linearized buffers from iov / filling buffers into iovs

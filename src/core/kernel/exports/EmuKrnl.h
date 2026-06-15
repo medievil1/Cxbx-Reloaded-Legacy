@@ -206,7 +206,7 @@ xbox::ntstatus_xt WaitApc(T &&Lambda, xbox::PLARGE_INTEGER Timeout, xbox::boolea
 			}
 		}
 	}
-
+	
 	if constexpr (host_wait) {
 		kThread->State = xbox::Running;
 	}

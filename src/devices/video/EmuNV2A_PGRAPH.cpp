@@ -19,8 +19,8 @@
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
 // *
-// *  This file is heavily based on code from XQEMU
-// *  https://github.com/xqemu/xqemu/blob/master/hw/xbox/nv2a/nv2a_pgraph.c
+// *  Originally based on code from XQEMU
+// *  (https://github.com/xqemu/xqemu), significantly reworked.
 // *  Copyright (c) 2012 espes
 // *  Copyright (c) 2015 Jannik Vogel
 // *  Copyright (c) 2018 Matt Borgerson
@@ -34,8 +34,8 @@
 // ******************************************************************
 
 // FIXME
-#define qemu_mutex_lock_iothread()
-#define qemu_mutex_unlock_iothread()
+#define host_mutex_lock_iothread()
+#define host_mutex_unlock_iothread()
 
 // Xbox uses 4 KiB pages
 #define TARGET_PAGE_BITS 12
@@ -236,7 +236,7 @@ static void pgraph_rdi_write(PGRAPHState *pg,
 
 DEVICE_READ32(PGRAPH)
 {
-	qemu_mutex_lock(&d->pgraph.pgraph_lock);
+	host_mutex_lock(&d->pgraph.pgraph_lock);
 
     PGRAPHState *pg = &d->pgraph;
 	DEVICE_READ32_SWITCH() {
@@ -265,7 +265,7 @@ DEVICE_READ32(PGRAPH)
 		DEVICE_READ32_REG(pgraph); // Was : DEBUG_READ32_UNHANDLED(PGRAPH);
 	}
 
-	qemu_mutex_unlock(&pg->pgraph_lock);
+	host_mutex_unlock(&pg->pgraph_lock);
 
 //    reg_log_read(NV_PGRAPH, addr, r);
 
@@ -277,12 +277,12 @@ DEVICE_WRITE32(PGRAPH)
     PGRAPHState *pg = &d->pgraph;
 //    reg_log_write(NV_PGRAPH, addr, val);
 
-	qemu_mutex_lock(&pg->pgraph_lock);
+	host_mutex_lock(&pg->pgraph_lock);
 
 	switch (addr) {
 	case NV_PGRAPH_INTR:
 		pg->pending_interrupts &= ~value;
-		qemu_cond_broadcast(&pg->interrupt_cond);
+		host_cond_broadcast(&pg->interrupt_cond);
 		break;
 	case NV_PGRAPH_INTR_EN:
 		pg->enabled_interrupts = value;
@@ -295,7 +295,7 @@ DEVICE_WRITE32(PGRAPH)
 					NV_PGRAPH_SURFACE_READ_3D) + 1)
 				% GET_MASK(pg->regs[RI(NV_PGRAPH_SURFACE)],
 					NV_PGRAPH_SURFACE_MODULO_3D));
-			qemu_cond_broadcast(&pg->flip_3d);
+			host_cond_broadcast(&pg->flip_3d);
 
 			// For MMIO-only games (no pushbuffer FLIP_STALL), mark surface dirty
 			// and wake the puller thread so its auto-present fires.  We can't call
@@ -335,7 +335,7 @@ DEVICE_WRITE32(PGRAPH)
 				pgraph_channel_id, context_address);
 
 			uint8_t *context_ptr = d->pramin.ramin_ptr + context_address;
-			uint32_t context_user = ldl_le_p((uint32_t*)context_ptr);
+			uint32_t context_user = *(uint32_t*)context_ptr;
 
 			NV2A_DPRINTF("    - CTX_USER = 0x%08X\n", context_user);
 
@@ -362,11 +362,11 @@ DEVICE_WRITE32(PGRAPH)
     // events
     switch (addr) {
     case NV_PGRAPH_FIFO:
-        qemu_cond_broadcast(&pg->fifo_access_cond);
+        host_cond_broadcast(&pg->fifo_access_cond);
         break;
     }
 
-	qemu_mutex_unlock(&pg->pgraph_lock);
+	host_mutex_unlock(&pg->pgraph_lock);
 
 	DEVICE_WRITE32_END(PGRAPH);
 }
@@ -397,10 +397,10 @@ void pgraph_handle_method(NV2AState *d,
         assert(parameter < d->pramin.ramin_size);
         uint8_t *obj_ptr = d->pramin.ramin_ptr + parameter;
 
-        uint32_t ctx_1 = ldl_le_p((uint32_t*)obj_ptr);
-        uint32_t ctx_2 = ldl_le_p((uint32_t*)(obj_ptr+4));
-        uint32_t ctx_3 = ldl_le_p((uint32_t*)(obj_ptr+8));
-        uint32_t ctx_4 = ldl_le_p((uint32_t*)(obj_ptr+12));
+        uint32_t ctx_1 = *(uint32_t*)obj_ptr;
+        uint32_t ctx_2 = *(uint32_t*)(obj_ptr+4);
+        uint32_t ctx_3 = *(uint32_t*)(obj_ptr+8);
+        uint32_t ctx_4 = *(uint32_t*)(obj_ptr+12);
         uint32_t ctx_5 = parameter;
 
         pg->regs[RI(NV_PGRAPH_CTX_CACHE1 + subchannel * 4)] = ctx_1;
@@ -630,34 +630,23 @@ void pgraph_handle_method(NV2AState *d,
 					NV_PGRAPH_TRAPPED_ADDR_MTHD, method);
 				pg->regs[RI(NV_PGRAPH_TRAPPED_DATA_LOW)] = parameter;
 				pg->regs[RI(NV_PGRAPH_NSOURCE)] = NV_PGRAPH_NSOURCE_NOTIFICATION;
-				pg->pending_interrupts |= NV_PGRAPH_INTR_ERROR;
+				pg->pending_interrupts.fetch_or(NV_PGRAPH_INTR_ERROR, std::memory_order_release);
 
-				qemu_mutex_unlock(&pg->pgraph_lock);
-				qemu_mutex_lock_iothread();
+				host_mutex_unlock(&pg->pgraph_lock);
 				update_irq(d);
-				qemu_mutex_lock(&pg->pgraph_lock);
-				qemu_mutex_unlock_iothread();
+				host_mutex_lock(&pg->pgraph_lock);
 
 				int localTimeouts = 0;
 				while (pg->pending_interrupts & NV_PGRAPH_INTR_ERROR) {
-					// Use timed wait as a safety net: if the DPC signal was lost
-					// (due to any unforeseen race), we re-signal after 50ms rather
-					// than hanging indefinitely. Normal path returns in <1ms.
-					if (qemu_cond_timedwait(&pg->interrupt_cond, &pg->pgraph_lock, 50)) {
+					if (host_cond_timedwait(&pg->interrupt_cond, &pg->pgraph_lock, 50)) {
 						localTimeouts++;
-						// After 6 timeouts (300ms), the ISR has had ample opportunity
-						// to ack but hasn't — likely because the game deregistered its
-						// callback handler for this specific TRAPPED_DATA value.
-						// Force-ack to unblock the puller. The callback won't fire
-						// (it wasn't going to anyway), but the command stream continues.
 						if (localTimeouts >= 6) {
-							pg->pending_interrupts &= ~NV_PGRAPH_INTR_ERROR;
+							pg->pending_interrupts.fetch_and(~NV_PGRAPH_INTR_ERROR, std::memory_order_release);
 							break;
 						}
-						// Re-signal DPC thread in case the original signal was lost
-						qemu_mutex_unlock(&pg->pgraph_lock);
+	host_mutex_unlock_shared(&pg->pgraph_lock);
 						update_irq(d);
-						qemu_mutex_lock(&pg->pgraph_lock);
+						host_mutex_lock(&pg->pgraph_lock);
 					}
 				}
 			}
@@ -695,9 +684,9 @@ void pgraph_handle_method(NV2AState *d,
 				d->pgraph.surface_color.draw_dirty = false;
 				extern bool g_PullerFlipStallThisCycle;
 				g_PullerFlipStallThisCycle = true;
-				qemu_mutex_unlock(&d->pgraph.pgraph_lock);
+				host_mutex_unlock(&d->pgraph.pgraph_lock);
 				g_pgraph_backend.flip_stall(d);
-				qemu_mutex_lock(&d->pgraph.pgraph_lock);
+				host_mutex_lock(&d->pgraph.pgraph_lock);
 			}
 
 			// VBlank-gated frame pacing: wait until the next VBlank deadline.
@@ -724,9 +713,9 @@ void pgraph_handle_method(NV2AState *d,
 
 				if (s_flipStallAnchor > 0) {
 					int64_t nextVBlankQPC = s_flipStallAnchor + vblankPeriodTicks;
-					qemu_mutex_unlock(&d->pgraph.pgraph_lock);
+					host_mutex_unlock(&d->pgraph.pgraph_lock);
 					int64_t wakeQPC = SleepPrecise(nextVBlankQPC);
-					qemu_mutex_lock(&d->pgraph.pgraph_lock);
+	host_mutex_lock_shared(&d->pgraph.pgraph_lock);
 
 					// Advance anchor by one period to maintain ideal cadence.
 					s_flipStallAnchor += vblankPeriodTicks;
@@ -1357,22 +1346,22 @@ void pgraph_handle_method(NV2AState *d,
 
 			uint8_t type = GET_MASK(parameter, NV097_GET_REPORT_TYPE);
 			assert(type == NV097_GET_REPORT_TYPE_ZPASS_PIXEL_CNT);
-			hwaddr offset = GET_MASK(parameter, NV097_GET_REPORT_OFFSET);
+			xbox::addr_xt offset = GET_MASK(parameter, NV097_GET_REPORT_OFFSET);
 
 			LARGE_INTEGER perfCounter;
 			QueryPerformanceCounter(&perfCounter);
 			uint64_t timestamp = (uint64_t)perfCounter.QuadPart;
 			uint32_t done = 0;
 
-			hwaddr report_dma_len;
+			xbox::addr_xt report_dma_len;
 			uint8_t *report_data = (uint8_t*)nv_dma_map(d, pg->dma_report,
 														&report_dma_len);
 			assert(offset < report_dma_len);
 			report_data += offset;
 
-			stq_le_p((uint64_t*)&report_data[0], timestamp);
-			stl_le_p((uint32_t*)&report_data[8], pg->zpass_pixel_count_result);
-			stl_le_p((uint32_t*)&report_data[12], done);
+			*(uint64_t*)&report_data[0] = timestamp;
+			*(uint32_t*)&report_data[8] = pg->zpass_pixel_count_result;
+			*(uint32_t*)&report_data[12] = done;
 
 			break;
 		}
@@ -1819,7 +1808,7 @@ void pgraph_handle_method(NV2AState *d,
 			}
 			semaphore_data += semaphore_offset;
 
-			stl_le_p((uint32_t*)semaphore_data, parameter);
+			*(uint32_t*)semaphore_data = parameter;
 
 			break;
 		}
@@ -2119,7 +2108,7 @@ static void pgraph_switch_context(NV2AState *d, unsigned int channel_id)
     bool channel_valid =
         d->pgraph.regs[RI(NV_PGRAPH_CTX_CONTROL)] & NV_PGRAPH_CTX_CONTROL_CHID;
     unsigned pgraph_channel_id = GET_MASK(d->pgraph.regs[RI(NV_PGRAPH_CTX_USER)], NV_PGRAPH_CTX_USER_CHID);
-	// Cxbx Note : This isn't present in xqemu / OpenXbox : d->pgraph.pgraph_lock.lock();
+	// Cxbx Note : pgraph_lock handling is reworked from the original XQEMU code.
     bool valid = channel_valid && pgraph_channel_id == channel_id;
 	if (!valid) {
         SET_MASK(d->pgraph.regs[RI(NV_PGRAPH_TRAPPED_ADDR)],
@@ -2131,24 +2120,22 @@ static void pgraph_switch_context(NV2AState *d, unsigned int channel_id)
         assert(!(d->pgraph.regs[RI(NV_PGRAPH_DEBUG_3)]
                 & NV_PGRAPH_DEBUG_3_HW_CONTEXT_SWITCH));
 
-		qemu_mutex_unlock(&d->pgraph.pgraph_lock);
-		qemu_mutex_lock_iothread();
-		d->pgraph.pending_interrupts |= NV_PGRAPH_INTR_CONTEXT_SWITCH; // TODO : Should this be done before unlocking pgraph_lock?
+		d->pgraph.pending_interrupts.fetch_or(NV_PGRAPH_INTR_CONTEXT_SWITCH, std::memory_order_release);
+		host_mutex_lock_iothread();
 		update_irq(d);
 
-		qemu_mutex_lock(&d->pgraph.pgraph_lock);
-		qemu_mutex_unlock_iothread();
+		host_mutex_unlock_iothread();
 
         // wait for the interrupt to be serviced
 		while (d->pgraph.pending_interrupts & NV_PGRAPH_INTR_CONTEXT_SWITCH) {
-			qemu_cond_wait(&d->pgraph.interrupt_cond, &d->pgraph.pgraph_lock);
+			host_cond_wait(&d->pgraph.interrupt_cond, &d->pgraph.pgraph_lock);
 		}
 	}
 }
 
 static void pgraph_wait_fifo_access(NV2AState *d) {
     while (!(d->pgraph.regs[RI(NV_PGRAPH_FIFO)] & NV_PGRAPH_FIFO_ACCESS)) {
-		qemu_cond_wait(&d->pgraph.fifo_access_cond, &d->pgraph.pgraph_lock);
+		host_cond_wait(&d->pgraph.fifo_access_cond, &d->pgraph.pgraph_lock);
 	}
 }
 
@@ -2247,10 +2234,10 @@ void pgraph_init(NV2AState *d)
 
 	nv097_init_method_table();
 
-	qemu_mutex_init(&pg->pgraph_lock);
-	qemu_cond_init(&pg->interrupt_cond);
-	qemu_cond_init(&pg->fifo_access_cond);
-	qemu_cond_init(&pg->flip_3d);
+	host_mutex_init(&pg->pgraph_lock);
+	host_cond_init(&pg->interrupt_cond);
+	host_cond_init(&pg->fifo_access_cond);
+	host_cond_init(&pg->flip_3d);
 
 	// Initialize vertex attribute defaults (inline_value / sticky registers).
 	// On NV2A hardware reset, diffuse (slot 3) and specular (slot 4) default
@@ -2290,10 +2277,10 @@ void pgraph_init(NV2AState *d)
 
 void pgraph_destroy(PGRAPHState *pg)
 {
-	qemu_mutex_destroy(&pg->pgraph_lock);
-	qemu_cond_destroy(&pg->interrupt_cond);
-	qemu_cond_destroy(&pg->fifo_access_cond);
-	qemu_cond_destroy(&pg->flip_3d);
+	host_mutex_destroy(&pg->pgraph_lock);
+	host_cond_destroy(&pg->interrupt_cond);
+	host_cond_destroy(&pg->fifo_access_cond);
+	host_cond_destroy(&pg->flip_3d);
 }
 
 static bool pgraph_get_color_write_enabled(PGRAPHState *pg)

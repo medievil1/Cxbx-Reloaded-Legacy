@@ -912,10 +912,11 @@ void CxbxUpdateNativeD3DResources()
 	// state, viewport, etc.) mid-draw-setup, causing intermittent flicker
 	// (e.g., dolphin drawn at wrong position, seafloor going black).
 	// The lock is released after all PGRAPH reads and before the D3D11 draw.
+	// Taken shared because this thread only reads PGRAPH state.
 	bool pgraph_locked = false;
 	if (!g_bInPullerContext) {
 		CXBX_PROFILE_SCOPE(PROF_PGRAPH_LOCK_WAIT);
-		qemu_mutex_lock(&g_NV2A->GetDeviceState()->pgraph.pgraph_lock);
+		host_mutex_lock_shared(&g_NV2A->GetDeviceState()->pgraph.pgraph_lock);
 		pgraph_locked = true;
 	}
 
@@ -1001,7 +1002,7 @@ void CxbxUpdateNativeD3DResources()
 	// Release pgraph_lock — all PGRAPH register reads for this draw are done.
 	// The puller thread is now free to process new commands for the next draw.
 	if (pgraph_locked) {
-		qemu_mutex_unlock(&pg->pgraph_lock);
+		host_mutex_unlock_shared(&pg->pgraph_lock);
 		pgraph_locked = false;
 	}
 

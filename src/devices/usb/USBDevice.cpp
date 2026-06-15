@@ -25,8 +25,7 @@
 // *
 // ******************************************************************
 
-// Acknowledgment: QEMU usb subsystem as used in XQEMU (GPLv2)
-// https://xqemu.com/
+// Originally based on the QEMU usb subsystem (GPLv2), significantly reworked.
 
 /*
 * QEMU USB emulation
@@ -248,11 +247,11 @@ void USBDevice::USB_HandlePacket(XboxDeviceState* dev, USBPacket* p)
 
 	// Submitting a new packet clears halt
 	if (p->Endpoint->Halted) {
-		assert(QTAILQ_EMPTY(&p->Endpoint->Queue));
+		assert(p->Endpoint->Queue.empty());
 		p->Endpoint->Halted = false;
 	}
 
-	if (QTAILQ_EMPTY(&p->Endpoint->Queue)) {
+	if (p->Endpoint->Queue.empty()) {
 		USB_ProcessOne(p);
 		if (p->Status == USB_RET_ASYNC) {
 			// hcd drivers cannot handle async for isoc
@@ -260,7 +259,7 @@ void USBDevice::USB_HandlePacket(XboxDeviceState* dev, USBPacket* p)
 			// using async for interrupt packets breaks migration
 			assert(p->Endpoint->Type != USB_ENDPOINT_XFER_INT);
 			p->State = USB_PACKET_ASYNC;
-			QTAILQ_INSERT_TAIL(&p->Endpoint->Queue, p, Queue);
+			p->Endpoint->Queue.push_back(p);
 		}
 		else if (p->Status == USB_RET_ADD_TO_QUEUE) {
 			USB_QueueOne(p);
@@ -268,7 +267,7 @@ void USBDevice::USB_HandlePacket(XboxDeviceState* dev, USBPacket* p)
 		else {
 			// When pipelining is enabled usb-devices must always return async,
 			// otherwise packets can complete out of order!
-			assert(QTAILQ_EMPTY(&p->Endpoint->Queue));
+			assert(p->Endpoint->Queue.empty());
 			if (p->Status != USB_RET_NAK) {
 				p->State = USB_PACKET_COMPLETE;
 			}
@@ -282,7 +281,7 @@ void USBDevice::USB_HandlePacket(XboxDeviceState* dev, USBPacket* p)
 void USBDevice::USB_QueueOne(USBPacket* p)
 {
 	p->State = USB_PACKET_QUEUED;
-	QTAILQ_INSERT_TAIL(&p->Endpoint->Queue, p, Queue);
+	p->Endpoint->Queue.push_back(p);
 	p->Status = USB_RET_ASYNC;
 }
 
@@ -589,7 +588,7 @@ void USBDevice::USB_CancelPacket(USBPacket* p)
 	bool callback = (p->State == USB_PACKET_ASYNC);
 	assert(USB_IsPacketInflight(p));
 	p->State = USB_PACKET_CANCELED;
-	QTAILQ_REMOVE(&p->Endpoint->Queue, p, Queue);
+	p->Endpoint->Queue.remove(p);
 	if (callback) {
 		USB_DeviceCancelPacket(p->Endpoint->Dev, p);
 	}
@@ -652,11 +651,6 @@ void USBDevice::USB_DeviceDetach(XboxDeviceState* dev)
 void USBDevice::USB_EpInit(XboxDeviceState* dev)
 {
 	USB_EpReset(dev);
-	QTAILQ_INIT(&dev->EP_ctl.Queue);
-	for (int ep = 0; ep < USB_MAX_ENDPOINTS; ep++) {
-		QTAILQ_INIT(&dev->EP_in[ep].Queue);
-		QTAILQ_INIT(&dev->EP_out[ep].Queue);
-	}
 }
 
 void USBDevice::USB_EpReset(XboxDeviceState* dev)
@@ -1221,30 +1215,21 @@ int USBDevice::USB_ReadStringDesc(XboxDeviceState* dev, int index, uint8_t* dest
 
 void USBDevice::USBDesc_SetString(XboxDeviceState* dev, int index, std::string&& str)
 {
-	USBDescString* s;
-
-	QLIST_FOREACH(s, &dev->Strings, next) {
-		if (s->index == index) {
-			break;
+	for (auto& s : dev->Strings) {
+		if (s.index == index) {
+			s.str = std::move(str);
+			return;
 		}
 	}
 
-	if (s == nullptr) {
-		s = new USBDescString();
-		s->index = index;
-		QLIST_INSERT_HEAD(&dev->Strings, s, next);
-	}
-
-	s->str = str;
+	dev->Strings.push_front({ static_cast<uint8_t>(index), std::move(str) });
 }
 
 const char* USBDevice::USBDesc_GetString(XboxDeviceState* dev, int index)
 {
-	USBDescString* s;
-
-	QLIST_FOREACH(s, &dev->Strings, next) {
-		if (s->index == index) {
-			return s->str.c_str();
+	for (auto& s : dev->Strings) {
+		if (s.index == index) {
+			return s.str.c_str();
 		}
 	}
 

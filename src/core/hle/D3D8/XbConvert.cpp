@@ -115,9 +115,9 @@ static const FormatInfo FormatInfos[] = {
 	/* 0x24 X_D3DFMT_YUY2         */ { 16, Linear, ____YUY2, EMUFMT_YUY2     , Texture, "X_D3DFMT_YUY2 -> EMUFMT_A8R8G8B8" },
 	/* 0x25 X_D3DFMT_UYVY         */ { 16, Linear, ____UYVY, EMUFMT_UYVY     , Texture, "X_D3DFMT_UYVY -> EMUFMT_A8R8G8B8" },
 	/* 0x26 undefined             */ {},
-	/* 0x27 X_D3DFMT_L6V5U5       */ { 16, Swzzld, __L6V5U5, EMUFMT_L6V5U5   }, // Alias : X_D3DFMT_R6G5B5 // XQEMU NOTE : This might be signed
-	/* 0x28 X_D3DFMT_V8U8         */ { 16, Swzzld, ____G8B8, EMUFMT_V8U8     }, // Alias : X_D3DFMT_G8B8 // XQEMU NOTE : This might be signed
-	/* 0x29 X_D3DFMT_R8B8         */ { 16, Swzzld, ____R8B8, EMUFMT_A8L8     , Texture, "X_D3DFMT_R8B8 -> EMUFMT_R5G6B5" }, // XQEMU NOTE : This might be signed
+	/* 0x27 X_D3DFMT_L6V5U5       */ { 16, Swzzld, __L6V5U5, EMUFMT_L6V5U5   }, // Alias : X_D3DFMT_R6G5B5 // NOTE : This might be signed
+	/* 0x28 X_D3DFMT_V8U8         */ { 16, Swzzld, ____G8B8, EMUFMT_V8U8     }, // Alias : X_D3DFMT_G8B8 // NOTE : This might be signed
+	/* 0x29 X_D3DFMT_R8B8         */ { 16, Swzzld, ____R8B8, EMUFMT_A8L8     , Texture, "X_D3DFMT_R8B8 -> EMUFMT_R5G6B5" }, // NOTE : This might be signed
 	/* 0x2A X_D3DFMT_D24S8        */ { 32, Swzzld, NoCmpnts, EMUFMT_D24S8    , DepthBuffer },
 	/* 0x2B X_D3DFMT_F24S8        */ { 32, Swzzld, NoCmpnts, EMUFMT_D24FS8   , DepthBuffer },
 	/* 0x2C X_D3DFMT_D16          */ { 16, Swzzld, NoCmpnts, EMUFMT_D16      , DepthBuffer }, // Note : X_D3DFMT_D16 is always lockable on Xbox, EMUFMT_D16 on host is not, but EMUFMT_D16_LOCKABLE often fails SetRenderTarget.

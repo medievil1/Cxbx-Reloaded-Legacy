@@ -25,8 +25,7 @@
 // *
 // ******************************************************************
 
-// Acknowledgment: QEMU hub device emulation as used in XQEMU (GPLv2)
-// https://xqemu.com/
+// Originally based on QEMU hub device emulation (GPLv2), significantly reworked.
 
 /*
 * QEMU USB HUB emulation
@@ -218,7 +217,6 @@ XboxDeviceState* Hub::ClassInitFn()
 	XboxDeviceState* dev = &m_HubState->dev;
 
 	dev->ProductDesc = "Cxbx-Reloaded USB Hub";
-	QLIST_INIT(&dev->Strings);
 	dev->klass = m_pPeripheralFuncStruct;
 
 	{

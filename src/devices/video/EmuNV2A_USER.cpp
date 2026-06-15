@@ -19,8 +19,8 @@
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
 // *
-// *  This file is heavily based on code from XQEMU
-// *  https://github.com/xqemu/xqemu/blob/master/hw/xbox/nv2a/nv2a_user.c
+// *  Originally based on code from XQEMU
+// *  (https://github.com/xqemu/xqemu), significantly reworked.
 // *  Copyright (c) 2012 espes
 // *  Copyright (c) 2015 Jannik Vogel
 // *  Copyright (c) 2018 Matt Borgerson
@@ -89,7 +89,7 @@ DEVICE_READ32(USER)
 		DEVICE_READ32_END(USER);
 	}
 
-	qemu_mutex_lock(&d->pfifo.pfifo_lock);
+	host_mutex_lock(&d->pfifo.pfifo_lock);
 
 	uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
 
@@ -125,7 +125,7 @@ DEVICE_READ32(USER)
 		assert(false);
 	}
 
-	qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+	host_mutex_unlock(&d->pfifo.pfifo_lock);
 
 	DEVICE_READ32_END(USER);
 }
@@ -135,7 +135,7 @@ DEVICE_WRITE32(USER)
 	unsigned int channel_id = addr >> 16;
 	assert(channel_id < NV2A_NUM_CHANNELS);
 
-	qemu_mutex_lock(&d->pfifo.pfifo_lock);
+	host_mutex_lock(&d->pfifo.pfifo_lock);
 
 	uint32_t channel_modes = d->pfifo.regs[RI(NV_PFIFO_MODE)];
 	if (channel_modes & (1 << channel_id)) {
@@ -148,28 +148,22 @@ DEVICE_WRITE32(USER)
 			switch (addr & 0xFFFF) {
 			case NV_USER_DMA_PUT: {
 				d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)] = value;
-				if (!d->enable_overlay) {
-					// Process commands inline on the game thread (synchronous).
-					// This ensures NV097_FLIP_STALL is handled before the game
-					// continues, preventing lost-signal races with the async
-					// pusher thread and guaranteeing deterministic present timing.
+				// Process commands inline on the game thread (synchronous).
+				// This ensures NV097_FLIP_STALL is handled before the game
+				// continues, guaranteeing deterministic present timing.
+				{
 					uint32_t push0    = d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUSH0)];
 					uint32_t dma_push = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUSH)];
 					bool pusher_can_run = GET_MASK(push0, NV_PFIFO_CACHE1_PUSH0_ACCESS)
 					                   && GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_ACCESS)
 					                   && !GET_MASK(dma_push, NV_PFIFO_CACHE1_DMA_PUSH_STATUS);
 					if (pusher_can_run) {
-						qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+						host_mutex_unlock(&d->pfifo.pfifo_lock);
 						CxbxSetPullerContext(true);
 						pfifo_run_pusher(d);
 						CxbxSetPullerContext(false);
-						qemu_mutex_lock(&d->pfifo.pfifo_lock);
+						host_mutex_lock(&d->pfifo.pfifo_lock);
 					}
-				} else {
-					// During overlay (video playback), process asynchronously.
-					// Inline processing would block the game thread for 13ms+
-					// because flip_stall composites the overlay every frame.
-					qemu_cond_signal(&d->pfifo.pusher_cond);
 				}
 				break;
 			}
@@ -196,7 +190,7 @@ DEVICE_WRITE32(USER)
 		assert(false);
 	}
 
-    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+    host_mutex_unlock(&d->pfifo.pfifo_lock);
 
 	DEVICE_WRITE32_END(USER);
 }

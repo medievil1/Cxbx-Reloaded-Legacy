@@ -4,8 +4,9 @@
 
 ### MMIO Dispatch Table (nv2a.cpp)
 - `regions[]` array defines MMIO address space routing
-- Each engine has offset, size, read/write handlers
-- Lookup via `EmuNV2A_Block(addr)` function
+- Each engine has offset, size, read/write function pointers
+- Lookup via `s_mmioPageTable[addr >> 12]` — O(1) 4096-entry page table (populated at init from regions[])
+- Before cleanup: `EmuNV2A_Block(addr)` did O(n) linear scan through the table
 
 ### Emulated Engines
 1. **PMC** — Power management, interrupt aggregation
@@ -52,15 +53,15 @@ Source files: `src/devices/video/nv2a.cpp` (block table), `src/devices/video/nv2
 
 ## 3. PFIFO Architecture
 
-- **Pusher thread**: Reads DMA push buffers, validates commands
-- **Puller thread**: Executes commands via `pfifo_run_puller()`
+- **Pusher**: Push buffer processing runs inline on the calling thread (background pusher thread removed in QEMU cleanup — processing is always synchronous on the thread that writes DMA_PUT)
+- **Puller thread**: Executes CACHE1 entries via `pfifo_run_puller()`, handles auto-present and overlay compositing
 - **RAMHT**: Hash table for object/handle lookups (XOR folding, channel ID mixed in)
 - **CACHE1**: Command FIFO cache holding 32 entries
 
 ### Key Finding: PFIFO DMA IS Initialized in HLE Mode
 - Xbox D3D runtime initializes PFIFO during D3DDevice_Create (PUSH0_ACCESS, DMA_PUSH_ACCESS)
-- The DMA pusher/puller threads ARE started and DO process commands
-- All unpatched D3D calls write to ring buffer → pusher/puller process to PGRAPH
+- DMA commands are processed inline on the calling thread → dispatched to PGRAPH
+- All unpatched D3D calls write to ring buffer → inline push buffer processing to PGRAPH
 - **CRITICAL**: DMA_GET drain must NOT advance GET=PUT when pusher is enabled
 
 ---
@@ -263,7 +264,7 @@ Xbox game → Xbox D3D runtime → NV2A PFIFO pushbuffer → PGRAPH regs[]
 
 **All D3D EMUPATCHes are disabled** (commented out in `Patches.cpp`). Implementations
 moved to the unused/dead code dustbin file. The DX11 renderer operates entirely from
-PGRAPH register state populated by the native PFIFO pusher/puller pipeline.
+PGRAPH register state populated by inline PFIFO push buffer processing.
 
 ### Previously KEEP (now also disabled)
 - Direct3D_CreateDevice — host DX11 device init now triggered by PFIFO

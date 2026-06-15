@@ -23,8 +23,8 @@
 // *  Copyright (c) 2015 Matt Borgerson
 // *  (c) 2017 Luke Usher <luke.usher@outlook.com>
 // * 
-// * This file is based on code from the XQEMU Project
-// * https://github.com/xqemu/xqemu/blob/xbox/hw/xbox/nvnet.c
+// * Originally based on code from XQEMU
+// * (https://github.com/xqemu/xqemu), significantly reworked.
 // *
 // *  All rights reserved
 // *

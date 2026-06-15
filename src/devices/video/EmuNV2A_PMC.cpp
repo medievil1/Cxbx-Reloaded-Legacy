@@ -19,8 +19,8 @@
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
 // *
-// *  This file is heavily based on code from XQEMU
-// *  https://github.com/xqemu/xqemu/blob/master/hw/xbox/nv2a/nv2a_pmc.c
+// *  Originally based on code from XQEMU
+// *  (https://github.com/xqemu/xqemu), significantly reworked.
 // *  Copyright (c) 2012 espes
 // *  Copyright (c) 2015 Jannik Vogel
 // *  Copyright (c) 2018 Matt Borgerson

@@ -19,8 +19,8 @@
 // *  If not, write to the Free Software Foundation, Inc.,
 // *  59 Temple Place - Suite 330, Bostom, MA 02111-1307, USA.
 // *
-// *  This file is heavily based on code from XQEMU
-// *  https://github.com/xqemu/xqemu/blob/master/hw/xbox/nv2a/nv2a_pfifo.c
+// *  Originally based on code from XQEMU
+// *  (https://github.com/xqemu/xqemu), significantly reworked.
 // *  Copyright (c) 2012 espes
 // *  Copyright (c) 2015 Jannik Vogel
 // *  Copyright (c) 2018 Matt Borgerson
@@ -85,7 +85,7 @@ DEVICE_READ32(PFIFO)
         DEVICE_READ32_END(PFIFO);
     }
 
-    qemu_mutex_lock(&d->pfifo.pfifo_lock);
+    host_mutex_lock(&d->pfifo.pfifo_lock);
 
 	DEVICE_READ32_SWITCH() {
 	case NV_PFIFO_RAMHT:
@@ -108,14 +108,14 @@ DEVICE_READ32(PFIFO)
 		break;
 	}
 
-    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+    host_mutex_unlock(&d->pfifo.pfifo_lock);
 
 	DEVICE_READ32_END(PFIFO);
 }
 
 DEVICE_WRITE32(PFIFO)
 {
-    qemu_mutex_lock(&d->pfifo.pfifo_lock);
+    host_mutex_lock(&d->pfifo.pfifo_lock);
 
 	switch(addr) {
 		case NV_PFIFO_INTR_0:
@@ -131,10 +131,9 @@ DEVICE_WRITE32(PFIFO)
 			break;
 	}
 
-    qemu_cond_broadcast(&d->pfifo.pusher_cond);
     SetEvent(d->pfifo.puller_event);
 
-    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+    host_mutex_unlock(&d->pfifo.pfifo_lock);
 
 	DEVICE_WRITE32_END(PFIFO);
 }
@@ -154,7 +153,7 @@ static bool pfifo_run_puller(NV2AState *d)
     uint32_t *get_reg = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_GET)];
     uint32_t *put_reg = &d->pfifo.regs[RI(NV_PFIFO_CACHE1_PUT)];
 
-    qemu_mutex_lock(&d->pgraph.pgraph_lock);
+    host_mutex_lock(&d->pgraph.pgraph_lock);
 
     while (true) {
         if (!GET_MASK(*pull0, NV_PFIFO_CACHE1_PULL0_ACCESS)) break;
@@ -179,8 +178,6 @@ static bool pfifo_run_puller(NV2AState *d)
         if (*status & NV_PFIFO_CACHE1_STATUS_HIGH_MARK) {
             // unset high mark
             *status &= ~NV_PFIFO_CACHE1_STATUS_HIGH_MARK;
-            // signal pusher
-            qemu_cond_signal(&d->pfifo.pusher_cond);            
         }
 
         uint32_t method = method_entry & 0x1FFC;
@@ -205,7 +202,7 @@ static bool pfifo_run_puller(NV2AState *d)
 
     }
 
-    qemu_mutex_unlock(&d->pgraph.pgraph_lock);
+    host_mutex_unlock(&d->pgraph.pgraph_lock);
     return processed_any;
 }
 
@@ -223,7 +220,7 @@ int pfifo_puller_thread(NV2AState *d)
     CxbxSetThreadName("Cxbx NV2A FIFO puller");
     CxbxSetPullerContext(true);
 
-    qemu_mutex_lock(&d->pfifo.pfifo_lock);
+    host_mutex_lock(&d->pfifo.pfifo_lock);
     while (!d->exiting) {
         bool had_commands = pfifo_run_puller(d);
 
@@ -239,9 +236,9 @@ int pfifo_puller_thread(NV2AState *d)
                 // Auto-present fallback for raw pushbuffer games that never
                 // issue NV097_FLIP_STALL.
                 d->pgraph.surface_color.draw_dirty = false;
-                qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+                host_mutex_unlock(&d->pfifo.pfifo_lock);
                 g_pgraph_backend.flip_stall(d);
-                qemu_mutex_lock(&d->pfifo.pfifo_lock);
+                host_mutex_lock(&d->pfifo.pfifo_lock);
             } else if (d->enable_overlay && d->overlay_dirty && !g_PullerFlipStallThisCycle) {
                 // PVIDEO overlay present: composite and display the overlay.
                 // Rate-limit to VBlank interval (~16.67ms at 60Hz) to avoid
@@ -256,32 +253,26 @@ int pfifo_puller_thread(NV2AState *d)
                     d->overlay_dirty = false;
                     d->overlay_last_present_qpc = now.QuadPart;
                     d->pgraph.surface_color.draw_dirty = false;
-                    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+                    host_mutex_unlock(&d->pfifo.pfifo_lock);
                     g_pgraph_backend.flip_stall(d);
-                    qemu_mutex_lock(&d->pfifo.pfifo_lock);
+                    host_mutex_lock(&d->pfifo.pfifo_lock);
                 }
             }
             g_PullerFlipStallThisCycle = false;
         }
 
-        // If the HLE thread is waiting for a PFIFO flush, signal it now
-        // that CACHE1 has been drained.
-        if (d->pfifo.flush_requested) {
-            qemu_cond_signal(&d->pfifo.flush_complete_cond);
-        }
-
         // Release pfifo_lock while sleeping so other threads can access PFIFO
         // registers.  Use a simple auto-reset event (puller_event) instead of
-        // qemu_cond — any thread can signal it without holding pfifo_lock,
-        // eliminating the deadlock-prone continue_event protocol.
+        // a condition variable — any thread can signal it without holding
+        // pfifo_lock, eliminating deadlock-prone protocol.
         // Use timed wait (16ms) when overlay is active so rate-limited presents
         // fire at VBlank rate even without explicit signals.
-        qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+        host_mutex_unlock(&d->pfifo.pfifo_lock);
         DWORD waitMs = (d->enable_overlay && d->overlay_dirty) ? 16 : INFINITE;
         WaitForSingleObject(d->pfifo.puller_event, waitMs);
-        qemu_mutex_lock(&d->pfifo.pfifo_lock);
+        host_mutex_lock(&d->pfifo.pfifo_lock);
     }
-    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+    host_mutex_unlock(&d->pfifo.pfifo_lock);
 
 	return 0;
 }
@@ -330,7 +321,7 @@ void pfifo_submit_pushbuffer(NV2AState *d, void *pPushData, uint32_t uSizeInByte
     // dispatched method.  pgraph_handle_method may release and re-acquire it
     // internally (CRITICAL_SECTION is reentrant), but the net effect is that
     // we hold it across all methods, eliminating N-1 redundant lock/unlock pairs.
-    qemu_mutex_lock(&d->pgraph.pgraph_lock);
+    host_mutex_lock(&d->pgraph.pgraph_lock);
 
     while (dma_get != dma_put) {
         if (dma_get >= dma_limit) {
@@ -433,7 +424,7 @@ void pfifo_submit_pushbuffer(NV2AState *d, void *pPushData, uint32_t uSizeInByte
     }
 
 done:
-    qemu_mutex_unlock(&d->pgraph.pgraph_lock);
+    host_mutex_unlock(&d->pgraph.pgraph_lock);
     CxbxSetPullerContext(false);
 }
 
@@ -471,7 +462,7 @@ void pfifo_flush_to_pgraph(NV2AState *d)
         }
     }
 
-    qemu_mutex_lock(&d->pfifo.pfifo_lock);
+    host_mutex_lock(&d->pfifo.pfifo_lock);
 
     uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
     uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
@@ -495,9 +486,9 @@ void pfifo_flush_to_pgraph(NV2AState *d)
             // triggered by pgraph_handle_method (e.g. pgraph_draw_arrays)
             // does not attempt a re-entrant pfifo_flush_to_pgraph.
             CxbxSetPullerContext(true);
-            qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+            host_mutex_unlock(&d->pfifo.pfifo_lock);
             pfifo_run_pusher(d);
-            qemu_mutex_lock(&d->pfifo.pfifo_lock);
+            host_mutex_lock(&d->pfifo.pfifo_lock);
             CxbxSetPullerContext(false);
         } else {
             // Advance GET past the unprocessable commands.
@@ -511,8 +502,7 @@ void pfifo_flush_to_pgraph(NV2AState *d)
         }
     }
 
-    d->pfifo.flush_requested = false;
-    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
+    host_mutex_unlock(&d->pfifo.pfifo_lock);
 }
 
 static void pfifo_throttle(NV2AState* d, uint64_t cycles)
@@ -574,11 +564,11 @@ static void pfifo_run_pusher(NV2AState *d)
     assert(GET_MASK(*dma_state, NV_PFIFO_CACHE1_DMA_STATE_ERROR)
             == NV_PFIFO_CACHE1_DMA_STATE_ERROR_NONE);
 
-    hwaddr dma_instance =
+    xbox::addr_xt dma_instance =
         GET_MASK(d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_INSTANCE)],
                  NV_PFIFO_CACHE1_DMA_INSTANCE_ADDRESS_MASK) << 4; // TODO : Use NV_PFIFO_CACHE1_DMA_INSTANCE_ADDRESS_MOVE?
 
-    hwaddr dma_len;
+    xbox::addr_xt dma_len;
     uint8_t *dma = (uint8_t*)nv_dma_map(d, dma_instance, &dma_len);
 
     // Acquire pgraph_lock once for the entire pushbuffer rather than once per
@@ -588,7 +578,7 @@ static void pfifo_run_pusher(NV2AState *d)
     // (e.g. NV097_NO_OPERATION notification, context switch) — CRITICAL_SECTION
     // is reentrant, so this is safe: each internal unlock/relock is balanced and
     // the function returns with the lock held.
-    qemu_mutex_lock(&d->pgraph.pgraph_lock);
+    host_mutex_lock(&d->pgraph.pgraph_lock);
 
 	/* based on the convenient pseudocode in envytools */
     while (true) {
@@ -602,7 +592,7 @@ static void pfifo_run_pusher(NV2AState *d)
             break;
         }
 
-        uint32_t word = ldl_le_p((uint32_t*)(dma + dma_get_v));
+        uint32_t word = *((uint32_t*)(dma + dma_get_v));
         dma_get_v += 4;
 
         d->pfifo.cycles += 16;
@@ -662,11 +652,11 @@ static void pfifo_run_pusher(NV2AState *d)
                     pg->draw_arrays_length > 0 &&
                     pg->draw_arrays_length < (ARRAY_SIZE(pg->draw_arrays_start) - 1)) {
                     uint32_t *peek = (uint32_t*)(dma + dma_get_v);
-                    uint32_t w0 = ldl_le_p(&peek[0]);  // expected: END header
-                    uint32_t w1 = ldl_le_p(&peek[1]);  // expected: END param (0)
-                    uint32_t w2 = ldl_le_p(&peek[2]);  // expected: BEGIN header
-                    uint32_t w3 = ldl_le_p(&peek[3]);  // expected: BEGIN param (primitive_mode)
-                    uint32_t w4 = ldl_le_p(&peek[4]);  // expected: DRAW_ARRAYS header
+                    uint32_t w0 = *(&peek[0]);  // expected: END header
+                    uint32_t w1 = *(&peek[1]);  // expected: END param (0)
+                    uint32_t w2 = *(&peek[2]);  // expected: BEGIN header
+                    uint32_t w3 = *(&peek[3]);  // expected: BEGIN param (primitive_mode)
+                    uint32_t w4 = *(&peek[4]);  // expected: DRAW_ARRAYS header
                     if ((w0 & 0x1FFC) == NV097_SET_BEGIN_END &&
                         w1 == NV097_SET_BEGIN_END_OP_END &&
                         (w2 & 0x1FFC) == NV097_SET_BEGIN_END &&
@@ -763,7 +753,7 @@ static void pfifo_run_pusher(NV2AState *d)
     }
 
     // Release the batched pgraph_lock acquired before the loop.
-    qemu_mutex_unlock(&d->pgraph.pgraph_lock);
+    host_mutex_unlock(&d->pgraph.pgraph_lock);
 
     // NV2A_DPRINTF("DMA pusher done: max 0x%08X, 0x%08X - 0x%08X\n",
     //      dma_len, control->dma_get, control->dma_put);
@@ -778,58 +768,6 @@ static void pfifo_run_pusher(NV2AState *d)
         d->pfifo.pending_interrupts |= NV_PFIFO_INTR_0_DMA_PUSHER;
         update_irq(d);
     }
-}
-
-int pfifo_pusher_thread(NV2AState *d)
-{
-    g_AffinityPolicy->SetAffinityOther();
-    CxbxSetThreadName("Cxbx NV2A FIFO pusher");
-    // Pusher now dispatches methods directly to PGRAPH (bypassing CACHE1), so
-    // draw callbacks (CxbxUpdateNativeD3DResources) must not attempt a
-    // re-entrant pfifo_flush_to_pgraph which would deadlock on pfifo_lock.
-    CxbxSetPullerContext(true);
-
-    qemu_mutex_lock(&d->pfifo.pfifo_lock);
-    while (true) {
-        {
-            CXBX_PROFILE_SCOPE(PROF_PFIFO_PUSHER);
-            // Release pfifo_lock during processing to prevent deadlock with
-            // the puller thread's D3D11ContextLock → pfifo_lock ordering.
-            qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-            pfifo_run_pusher(d);
-            qemu_mutex_lock(&d->pfifo.pfifo_lock);
-        }
-
-        // flush_requested is no longer set by pfifo_flush_to_pgraph (flush now
-        // processes the pushbuffer inline on the calling thread).  The check
-        // and signal below are kept as a safety net in case any future code
-        // path restores the old protocol, but they are normally dead code.
-        if (d->pfifo.flush_requested) {
-            d->pfifo.flush_requested = false;
-            qemu_cond_signal(&d->pfifo.flush_complete_cond);
-        }
-
-        // Check for pending work before sleeping.  cond_signal is a no-op if
-        // we aren't waiting, so new DMA_PUT writes that arrived while
-        // pfifo_run_pusher was running (lock released) would be lost without
-        // this predicate check.
-        {
-            uint32_t get_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_GET)];
-            uint32_t put_v = d->pfifo.regs[RI(NV_PFIFO_CACHE1_DMA_PUT)];
-            if (get_v != put_v) {
-                continue; // More work arrived — process it immediately
-            }
-        }
-
-        qemu_cond_wait(&d->pfifo.pusher_cond, &d->pfifo.pfifo_lock);
-
-        if (d->exiting) {
-            break;
-        }
-    }
-    qemu_mutex_unlock(&d->pfifo.pfifo_lock);
-
-	return 0;
 }
 
 unsigned int ramht_size(NV2AState *d)
@@ -867,8 +805,8 @@ static RAMHTEntry ramht_lookup(NV2AState *d, uint32_t handle)
 
 	uint8_t *entry_ptr = d->pramin.ramin_ptr + ramht_address + hash * 8;
 
-	uint32_t entry_handle = ldl_le_p((uint32_t*)entry_ptr);
-	uint32_t entry_context = ldl_le_p((uint32_t*)(entry_ptr + 4));
+	uint32_t entry_handle = *((uint32_t*)entry_ptr);
+	uint32_t entry_context = *((uint32_t*)(entry_ptr + 4));
 
 	RAMHTEntry entry;
 	entry.handle = entry_handle;

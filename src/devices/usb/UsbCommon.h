@@ -25,8 +25,7 @@
 // *
 // ******************************************************************
 
-// Acknowledgment: some these functions are from the QEMU usb api used in XQEMU (GPLv2)
-// https://xqemu.com/
+// Originally based on the QEMU usb api (GPLv2), significantly reworked.
 
 /*
 * QEMU USB API
@@ -56,7 +55,7 @@
 #define USBCOMMON_H_
 
 #include "common\util\CxbxUtil.h"
-#include "..\devices\video\queue.h"
+#include <list>
 #include <functional>
 
 #define USB_MAX_ENDPOINTS  15
@@ -186,7 +185,6 @@ struct USBPortOps;
 struct USBDescString {
 	uint8_t index;      // index of this string descriptor
 	std::string str;    // the string of this string descriptor
-	QLIST_ENTRY(USBDescString) next;
 };
 
 // Device-specific class descriptors, if any. No idea if some Xbox devices use this but, if not, this can be removed
@@ -336,7 +334,7 @@ struct USBEndpoint {
 	int MaxPacketSize;                // maximum packet size supported by this endpoint
 	bool Halted;                      // indicates that the endpoint is halted
 	XboxDeviceState* Dev;             // device this endpoint belongs to
-	QTAILQ_HEAD(, USBPacket) Queue;   // queue of packets to this endpoint
+	std::list<USBPacket*> Queue;      // queue of packets to this endpoint
 };
 
 /* Struct describing the status of a usb port */
@@ -420,7 +418,7 @@ struct XboxDeviceState {
 	USBEndpoint EP_in[USB_MAX_ENDPOINTS];  // device endpoint (input direction)
 	USBEndpoint EP_out[USB_MAX_ENDPOINTS]; // device endpoint (output direction)
 
-	QLIST_HEAD(, USBDescString) Strings;   // strings of the string descriptors
+	std::list<USBDescString> Strings;      // strings of the string descriptors
 	const USBDesc* UsbDesc;                // Overrides class usb_desc if not nullptr
 	const USBDescDevice* Device;           // device descriptor part 1
 
@@ -443,7 +441,6 @@ struct USBPacket {
 	int ActualLength;                    // number of bytes actually written to DataBuffer
 	// Internal use by the USB layer
 	USBPacketState State;
-	QTAILQ_ENTRY(USBPacket) Queue;
 };
 
 struct USBPortOps {

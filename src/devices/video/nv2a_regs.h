@@ -1,4 +1,4 @@
-// Source : https://github.com/xqemu/xqemu/blob/master/hw/xbox/nv2a_regs.h
+// NV2A register definitions — originally based on XQEMU, significantly reworked.
 /*
  * QEMU Geforce NV2A register definitions
  *

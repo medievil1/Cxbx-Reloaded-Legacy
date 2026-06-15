@@ -1500,7 +1500,7 @@ static void CxbxrKrnlInitHacks()
 				if (!d->pmc.enabled_interrupts &&
 				    (d->pgraph.pending_interrupts & NV_PGRAPH_INTR_ERROR)) {
 					d->pgraph.pending_interrupts &= ~NV_PGRAPH_INTR_ERROR;
-					qemu_cond_broadcast(&d->pgraph.interrupt_cond);
+					host_cond_broadcast(&d->pgraph.interrupt_cond);
 				}
 
 				if (nv2a_irq_pending &&

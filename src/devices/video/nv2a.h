@@ -72,11 +72,15 @@ inline void D3DPUSH_DECODE(const DWORD dwPushCommand, DWORD & dwMethod, DWORD & 
 	dwCount = PUSH_COUNT(dwPushCommand);
 }
 
+typedef uint32_t(*nv2a_read_func)(NV2AState *d, xbox::addr_xt addr);
+typedef void(*nv2a_write_func)(NV2AState *d, xbox::addr_xt addr, uint32_t val);
+
 typedef struct NV2ABlockInfo {
 	const char* name;
-	hwaddr offset;
+	xbox::addr_xt offset;
 	uint64_t size;
-	MemoryRegionOps ops;
+	nv2a_read_func read;
+	nv2a_write_func write;
 } NV2ABlockInfo;
 
 const NV2ABlockInfo* EmuNV2A_Block(xbox::addr_xt addr);
@@ -119,9 +123,7 @@ public:
 
 	uint32_t IORead(int barIndex, uint32_t port, unsigned size);
 	void IOWrite(int barIndex, uint32_t port, uint32_t value, unsigned size);
-	uint32_t BlockRead(const NV2ABlockInfo* block, uint32_t addr, unsigned size);
 	uint32_t MMIORead(int barIndex, uint32_t addr, unsigned size);
-	void BlockWrite(const NV2ABlockInfo* block, uint32_t addr, uint32_t value, unsigned size);
 	void MMIOWrite(int barIndex, uint32_t addr, uint32_t value, unsigned size);
 
 	static void UpdateHostDisplay(NV2AState *d);
