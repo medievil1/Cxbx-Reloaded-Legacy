@@ -1397,29 +1397,43 @@ xbox::ntstatus_xt IopQueryDeviceInformation
 		LocalEvent = true;
 	}
 
-	// Which then lead to bunch of irp work. For now we just map to Windows' file system call.
-	LOG_INCOMPLETE();
 	ntstatus_xt result;
-	if (const auto& nhandle = GetObjectNativeHandle(FileObject)) {
-
-		NativeObjectAttributes nativeObjectAttributes;
-		NtDll::FILE_NETWORK_OPEN_INFORMATION nativeNetOpenInfo;
-		nativeObjectAttributes.wszObjectName[0] = NULL;
-		NtDll::RtlInitUnicodeString(&nativeObjectAttributes.NtUnicodeString, nativeObjectAttributes.wszObjectName);
-		// And initialize the NT ObjectAttributes with that :
-		InitializeObjectAttributes(&nativeObjectAttributes.NtObjAttr, &nativeObjectAttributes.NtUnicodeString, 0x40/*Not tested and may not be accurate as we don't have Attributes passed down*/, *nhandle, NULL);
-		nativeObjectAttributes.NtObjAttrPtr = &nativeObjectAttributes.NtObjAttr;
-
-		result = NtDll::NtQueryFullAttributesFile(
-			nativeObjectAttributes.NtObjAttrPtr,
-			&nativeNetOpenInfo);
-
-		// Convert Attributes to Xbox
-		NTToXboxFileInformation(&nativeNetOpenInfo, FileInformation, FileNetworkOpenInformation, sizeof(xbox::FILE_NETWORK_OPEN_INFORMATION));
-
-		if (FAILED(result)) {
-			EmuLog(LOG_LEVEL::WARNING, "NtQueryFullAttributesFile failed! (0x%.08X)", result);
+	const auto& nhandle = GetObjectNativeHandle(FileObject);
+	if (nhandle) {
+		// Reject unknown or sentinel information classes.
+		if (FileInformationClass <= 0 ||
+		    FileInformationClass >= FileMaximumInformation ||
+		    IopQueryOperationLength[FileInformationClass] == 0) {
+			ObfDereferenceObject(FileObject);
+			return X_STATUS_INVALID_INFO_CLASS;
 		}
+
+		size_t bufferSize = IopQueryOperationLength[FileInformationClass];
+
+		PVOID ntFileInfo = malloc(bufferSize);
+		if (ntFileInfo == nullptr) {
+			ObfDereferenceObject(FileObject);
+			return X_STATUS_NO_MEMORY;
+		}
+
+		NtDll::IO_STATUS_BLOCK ioStatusBlock = {};
+		result = NtDll::NtQueryInformationFile(
+			*nhandle,
+			&ioStatusBlock,
+			ntFileInfo,
+			(ULONG)bufferSize,
+			(NtDll::FILE_INFORMATION_CLASS)FileInformationClass);
+
+		if (X_NT_SUCCESS(result)) {
+			NTToXboxFileInformation(ntFileInfo, FileInformation, FileInformationClass, Length);
+			if (ReturnedLength != nullptr) {
+				*ReturnedLength = (ULONG)ioStatusBlock.Information;
+			}
+		} else {
+			EmuLog(LOG_LEVEL::WARNING, "NtQueryInformationFile failed! (0x%.08X)", result);
+		}
+
+		free(ntFileInfo);
 	}
 	else {
 		result = X_STATUS_INVALID_PARAMETER;
