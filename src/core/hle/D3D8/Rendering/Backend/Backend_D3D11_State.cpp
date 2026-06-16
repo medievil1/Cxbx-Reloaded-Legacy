@@ -1006,10 +1006,21 @@ void CxbxD3D11UpdateRenderTargetFromPGRAPH(PGRAPHState *pg)
 	UINT rtWidth = surf.clipWidth;
 	UINT rtHeight = surf.clipHeight;
 
-	// For swizzled surfaces, actual dimensions are power-of-2 from logWidth/logHeight
+	// Determine actual render target dimensions
 	if (surf.surfaceType == 0x2 /*NV097_SET_SURFACE_FORMAT_TYPE_SWIZZLE*/) {
+		// For swizzled surfaces, actual dimensions are power-of-2 from logWidth/logHeight
 		rtWidth = 1u << surf.logWidth;
 		rtHeight = 1u << surf.logHeight;
+	} else {
+		// For linear surfaces, derive width from pitch to avoid reacting to transient clip rect changes.
+		uint32_t colorFmt = NV2AFormatToDXGI(surf.colorFormat, true);
+		uint32_t colorBpp = (colorFmt == DXGI_FORMAT_B8G8R8A8_UNORM) ? 4 :
+			(colorFmt == DXGI_FORMAT_R8_UNORM) ? 1 : 2;
+		if (surf.colorPitch > 0) {
+			rtWidth = surf.colorPitch / colorBpp;
+		}
+		rtHeight = std::max((uint32_t)(surf.clipY + surf.clipHeight), g_EmuCDPD.HostPresentationParameters.BackBufferHeight);
+		if (rtHeight == 0) rtHeight = 480;
 	}
 
 	// Apply anti-aliasing factor to surface dimensions.

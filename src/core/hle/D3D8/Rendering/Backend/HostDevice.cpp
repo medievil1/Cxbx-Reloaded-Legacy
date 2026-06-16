@@ -849,15 +849,32 @@ void GetScreenScaleFactors(float& scaleX, float& scaleY) {
 // Get the base rendertarget dimensions excluding multisample scaling
 // e.g. a raw 1280*960 rendertarget with 2x MSAA would be have a base 640*480
 void GetRenderTargetBaseDimensions(float& x, float& y) {
-	// Read render target dimensions from PGRAPH surface clip (replaces HLE g_pXbox_RenderTarget lookup)
+	// Read render target dimensions from PGRAPH surface state.
+	// We avoid using clipWidth/clipHeight for linear surfaces because games can
+	// change the clip rect (scissor) without changing the actual surface dimensions.
 	auto surf = NV2AGetSurfaceState();
-	x = (float)surf.clipWidth;
-	y = (float)surf.clipHeight;
+	if (surf.surfaceType == 0x2 /*SWIZZLE*/) {
+		x = (float)(1u << surf.logWidth);
+		y = (float)(1u << surf.logHeight);
+	} else {
+		// LINEAR or 1D
+		uint32_t colorFmt = NV2AFormatToDXGI(surf.colorFormat, true);
+		uint32_t colorBpp = (colorFmt == DXGI_FORMAT_B8G8R8A8_UNORM) ? 4 :
+			(colorFmt == DXGI_FORMAT_R8_UNORM) ? 1 : 2;
+		if (surf.colorPitch > 0) {
+			x = (float)(surf.colorPitch / colorBpp);
+		} else {
+			x = (float)surf.clipWidth;
+		}
+		// Linear surfaces don't have a defined height in NV2A, use max of clip and backbuffer
+		y = (float)std::max((uint32_t)(surf.clipY + surf.clipHeight), g_EmuCDPD.HostPresentationParameters.BackBufferHeight);
+		if (y == 0) y = 480.0f;
+	}
 
-	// NV2A clip registers (SURFACECLIPX/Y) contain LOGICAL dimensions.
+	// NV2A logical dimensions don't include AA.
 	// The AA factor (CENTER_CORNER_2, SQUARE_OFFSET_4) is a separate
 	// hardware register that scales the surface physically — it is NOT
-	// baked into the clip rect. So no AA division needed here.
+	// baked into the logical dimensions.
 	// For SSAA, the D3D runtime adjusts the viewport transform via
 	// GetScreenScaleFactors, which multiplies by the AA factor.
 }
