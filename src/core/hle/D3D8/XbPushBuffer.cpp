@@ -72,14 +72,30 @@ static void D3D11_draw_arrays(NV2AState *d)
 {
 	PGRAPHState *pg = &d->pgraph;
 
-	for (unsigned int i = 0; i < pg->draw_arrays_length; i++) {
+	// Merge adjacent draw batches to reduce draw call overhead.
+	// Many games issue small consecutive DRAW_ARRAYS calls (e.g. 42+12 verts
+	// for separate mesh parts) that the PFIFO squashing can't merge because
+	// the squashing only handles END/BEGIN optimizations, not multiple calls
+	// within a single BEGIN/END block. Works for all primitive types including
+	// TRIANGLESTRIP — adjacent strips merge into a single strip; degenerate
+	// triangles at the seam (two repeated vertices) are harmless.
+	for (unsigned int i = 0; i < pg->draw_arrays_length; ) {
+		UINT mergedStart = pg->draw_arrays_start[i];
+		UINT mergedCount = pg->draw_arrays_count[i];
+		unsigned int j = i + 1;
+		while (j < pg->draw_arrays_length &&
+			pg->draw_arrays_start[j] == mergedStart + mergedCount) {
+			mergedCount += pg->draw_arrays_count[j];
+			j++;
+		}
+
 		CxbxDrawContext DrawContext = {};
-
 		DrawContext.XboxPrimitiveType = (xbox::X_D3DPRIMITIVETYPE)pg->primitive_mode;
-		DrawContext.dwStartVertex = pg->draw_arrays_start[i];
-		DrawContext.dwVertexCount = pg->draw_arrays_count[i];
-
+		DrawContext.dwStartVertex = mergedStart;
+		DrawContext.dwVertexCount = mergedCount;
 		CxbxD3D11VertexFetchDraw(DrawContext);
+
+		i = j; // Skip merged entries
 	}
 }
 
@@ -105,7 +121,7 @@ static void D3D11_draw_inline_array(NV2AState *d)
 	// of 4 (e.g. SHORT3=6, PBYTE3=3, NORMSHORT3=6).
 	unsigned int nv2a_stride = 0;
 	for (int i = 0; i < NV2A_VERTEXSHADER_ATTRIBUTES; i++) {
-		if (pg->vertex_attributes[i].count != 0) { // count 0 = disabled (format 0 is valid: UB_D3D/D3DCOLOR)
+		if (pg->vertex_attributes[i].count != 0 || pg->vertex_attributes[i].format == 0) { // count 0 = disabled, except format 0 (UB_D3D/D3DCOLOR) is valid
 			nv2a_stride += pg->vertex_attributes[i].count * pg->vertex_attributes[i].size;
 			nv2a_stride = (nv2a_stride + 3) & ~3u; // pad to DWORD boundary
 		}
@@ -153,14 +169,67 @@ void D3D11_draw(NV2AState *d)
 	CxbxPageTrackerLockD3D11Context();
 	PGRAPHState *pg = &d->pgraph;
 
+	// Draw logging
+	static uint64_t s_drawCount = 0;
+	static uint64_t s_vertexCount = 0;
+	s_drawCount++;
+
 	if (pg->draw_arrays_length) {
+		for (unsigned int i = 0; i < pg->draw_arrays_length; i++)
+			s_vertexCount += pg->draw_arrays_count[i];
+		LOG_CHECK_ENABLED(LOG_LEVEL::DEBUG) {
+			uint32_t primType = pg->primitive_mode;
+			const char* primName = "?";
+			switch (primType) {
+			case NV097_SET_BEGIN_END_OP_TRIANGLES:      primName = "TRIANGLES"; break;
+			case NV097_SET_BEGIN_END_OP_TRIANGLE_STRIP:  primName = "TRISTRIP"; break;
+			case NV097_SET_BEGIN_END_OP_TRIANGLE_FAN:    primName = "TRIFAN"; break;
+			case NV097_SET_BEGIN_END_OP_QUADS:           primName = "QUADS"; break;
+			case NV097_SET_BEGIN_END_OP_QUAD_STRIP:      primName = "QUADSTRIP"; break;
+			case NV097_SET_BEGIN_END_OP_LINES:           primName = "LINES"; break;
+			case NV097_SET_BEGIN_END_OP_LINE_STRIP:      primName = "LINESTRIP"; break;
+			case NV097_SET_BEGIN_END_OP_LINE_LOOP:       primName = "LINELOOP"; break;
+			case NV097_SET_BEGIN_END_OP_POINTS:          primName = "POINTS"; break;
+			case NV097_SET_BEGIN_END_OP_POLYGON:         primName = "POLYGON"; break;
+			}
+			EmuLog(LOG_LEVEL::DEBUG, "Draw: VB Arrays prim=%s batches=%u firstVerts=%u totalVerts=%u",
+				primName, pg->draw_arrays_length,
+				pg->draw_arrays_start[0], s_vertexCount);
+		}
 		D3D11_draw_arrays(d);
 	} else if (pg->inline_buffer_length) {
+		s_vertexCount += pg->inline_buffer_length;
+		LOG_CHECK_ENABLED(LOG_LEVEL::DEBUG) {
+			EmuLog(LOG_LEVEL::DEBUG, "Draw: InlineBuf verts=%u", pg->inline_buffer_length);
+		}
 		D3D11_draw_inline_buffer(d);
 	} else if (pg->inline_array_length) {
+		unsigned int verts = 0;
+		unsigned int stride = 0;
+		for (int i = 0; i < NV2A_VERTEXSHADER_ATTRIBUTES; i++) {
+			if (pg->vertex_attributes[i].count != 0 || pg->vertex_attributes[i].format == 0) {
+				stride += pg->vertex_attributes[i].count * pg->vertex_attributes[i].size;
+				stride = (stride + 3) & ~3u;
+			}
+		}
+		if (stride > 0) verts = (pg->inline_array_length * 4) / stride;
+		s_vertexCount += verts;
+		LOG_CHECK_ENABLED(LOG_LEVEL::DEBUG) {
+			EmuLog(LOG_LEVEL::DEBUG, "Draw: InlineArray verts=%u stride=%u", verts, stride);
+		}
 		D3D11_draw_inline_array(d);
 	} else if (pg->inline_elements_length) {
+		s_vertexCount += pg->inline_elements_length;
+		LOG_CHECK_ENABLED(LOG_LEVEL::DEBUG) {
+			EmuLog(LOG_LEVEL::DEBUG, "Draw: InlineElements idxCount=%u", pg->inline_elements_length);
+		}
 		D3D11_draw_inline_elements(d);
+	}
+
+	// Throughput logging: every 120 draws, log aggregate stats
+	if (s_drawCount % 120 == 0) {
+		EmuLog(LOG_LEVEL::INFO, "DrawStats: %llu draws, %llu vertices (avg %.1f verts/draw)",
+			s_drawCount, s_vertexCount, (double)s_vertexCount / s_drawCount);
 	}
 	CxbxPageTrackerUnlockD3D11Context();
 }
@@ -294,7 +363,7 @@ void D3D11_draw_clear(NV2AState *d)
 	// NV097 flags match X_D3DCLEAR values exactly, but host D3DCLEAR_TARGET
 	// is a single bit while NV097 has per-channel RGBA bits.
 	DWORD hostFlags = 0;
-	if (flags & NV097_CLEAR_SURFACE_COLOR)
+	if (flags & (NV097_CLEAR_SURFACE_R | NV097_CLEAR_SURFACE_G | NV097_CLEAR_SURFACE_B))
 		hostFlags |= D3DCLEAR_TARGET;
 	if (flags & NV097_CLEAR_SURFACE_Z)
 		hostFlags |= D3DCLEAR_ZBUFFER;
@@ -447,6 +516,11 @@ static void D3D11_flip_stall(NV2AState *d)
 	if (!pXboxBackBufferHostSurface) {
 		pXboxBackBufferHostSurface = g_pHostPgraphBackBuffer;
 	}
+	// Diagnostic: always log which buffer is being displayed (bypasses log filter)
+	printf("[FlipStall] pcrtc_start=0x%X %s hostBB=%ux%u\n",
+		d->pcrtc.start,
+		pXboxBackBufferHostSurface ? "CACHED" : "FALLBACK",
+		g_HostBackBufferDesc.Width, g_HostBackBufferDesc.Height);
 	if (pXboxBackBufferHostSurface) {
 		RECT dest{};
 		dest.top = (LONG)((g_HostBackBufferDesc.Height - height) / 2);
