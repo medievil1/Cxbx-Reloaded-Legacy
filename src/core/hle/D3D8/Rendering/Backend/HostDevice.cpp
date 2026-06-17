@@ -875,7 +875,7 @@ void GetRenderTargetBaseDimensions(float& x, float& y) {
 
 		x = physicalWidth / aa_factor_x;
 
-		float physicalHeight = (float)std::max((uint32_t)(surf.clipY + surf.clipHeight), g_EmuCDPD.HostPresentationParameters.BackBufferHeight);
+		float physicalHeight = (float)std::max((uint32_t)(surf.clipY + surf.clipHeight), (uint32_t)surf.clipHeight);
 		if (physicalHeight == 0) physicalHeight = 480.0f;
 		y = physicalHeight / aa_factor_y;
 	}
