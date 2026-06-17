@@ -55,7 +55,10 @@ void main(uint3 dtid : SV_DispatchThreadID) {
             WriteU32(do_, ReadU32(so));
             WriteU32(do_ + 4, ReadU16(so + 4) | (1u << 16));
         } else if (ct == CONV_PBYTE3) {
-            WriteU32(do_, (ReadU32(so) & 0x00FFFFFFu) | 0xFF000000u);
+            uint c = ReadU32(so);
+            // Write padding bytes to 1.0f (or 0xFF) instead of assuming 4-byte padding value is 0xFF.
+            // On Xbox, PBYTE3 expands to 4 floats (X,Y,Z,1.0), so we pad with 0xFF in UNORM to represent 1.0.
+            WriteU32(do_, (c & 0x00FFFFFFu) | 0xFF000000u);
         } else if (ct == CONV_FLOAT2H) {
             WriteU32(do_, ReadU32(so));
             WriteU32(do_ + 4, ReadU32(so + 4));

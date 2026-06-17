@@ -849,15 +849,34 @@ void GetScreenScaleFactors(float& scaleX, float& scaleY) {
 // Get the base rendertarget dimensions excluding multisample scaling
 // e.g. a raw 1280*960 rendertarget with 2x MSAA would be have a base 640*480
 void GetRenderTargetBaseDimensions(float& x, float& y) {
-	// Read render target dimensions from PGRAPH surface clip (replaces HLE g_pXbox_RenderTarget lookup)
 	auto surf = NV2AGetSurfaceState();
-	x = (float)surf.clipWidth;
-	y = (float)surf.clipHeight;
+	if (surf.surfaceType == 0x2 /*SWIZZLE*/) {
+		x = (float)(1u << surf.logWidth);
+		y = (float)(1u << surf.logHeight);
+	} else {
+		// LINEAR or 1D
+		uint32_t colorBpp = (surf.colorFormat >= 4 && surf.colorFormat <= 8) ? 4 :
+			(surf.colorFormat == 9) ? 1 : 2;
+			
+		float physicalWidth = (float)surf.clipWidth;
+		if (surf.colorPitch > 0) {
+			physicalWidth = (float)(surf.colorPitch / colorBpp);
+		}
+		
+		// Extract AA factor to convert physical width back to logical width
+		float aa_factor_x = 1.0f;
+		float aa_factor_y = 1.0f;
+		if (surf.antiAliasing == 1 /* CENTER_CORNER_2 */) {
+			aa_factor_x = 2.0f; 
+		} else if (surf.antiAliasing == 2 /* SQUARE_OFFSET_4 */) {
+			aa_factor_x = 2.0f;
+			aa_factor_y = 2.0f;
+		}
 
-	// NV2A clip registers (SURFACECLIPX/Y) contain LOGICAL dimensions.
-	// The AA factor (CENTER_CORNER_2, SQUARE_OFFSET_4) is a separate
-	// hardware register that scales the surface physically — it is NOT
-	// baked into the clip rect. So no AA division needed here.
-	// For SSAA, the D3D runtime adjusts the viewport transform via
-	// GetScreenScaleFactors, which multiplies by the AA factor.
+		x = physicalWidth / aa_factor_x;
+
+		float physicalHeight = (float)std::max((uint32_t)(surf.clipY + surf.clipHeight), g_EmuCDPD.HostPresentationParameters.BackBufferHeight);
+		if (physicalHeight == 0) physicalHeight = 480.0f;
+		y = physicalHeight / aa_factor_y;
+	}
 }
