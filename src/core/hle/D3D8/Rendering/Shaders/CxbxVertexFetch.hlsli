@@ -309,6 +309,27 @@ float4 FetchAttribute(uint xboxVtxIdx, uint4 attribDesc, float4 defaultVal)
 
     uint byteOff = streamBase + xboxVtxIdx * stride + elemOffset;
 
+    // NV2A DMA hardware aligns vertex attribute fetches based on the element size.
+    // Tightly packed streams might have unaligned base addresses, but the hardware
+    // naturally truncates the address to the boundary of the format size.
+    // 4-byte and 8-byte formats must be DWORD-aligned.
+    // 2-byte formats must be WORD-aligned.
+    // 1-byte formats can be byte-aligned.
+    if (fmt == CXBX_VTXFMT_D3DCOLOR || fmt == CXBX_VTXFMT_PBYTE4 || 
+        fmt == CXBX_VTXFMT_SHORT2 || fmt == CXBX_VTXFMT_SHORT4 || 
+        fmt == CXBX_VTXFMT_SHORT2N || fmt == CXBX_VTXFMT_SHORT4N ||
+        fmt == CXBX_VTXFMT_NORMPACKED3 || fmt == CXBX_VTXFMT_FLOAT1 ||
+        fmt == CXBX_VTXFMT_FLOAT2 || fmt == CXBX_VTXFMT_FLOAT3 || fmt == CXBX_VTXFMT_FLOAT4 ||
+        fmt == CXBX_VTXFMT_FLOAT2H)
+    {
+        byteOff &= ~3u;
+    }
+    else if (fmt == CXBX_VTXFMT_SHORT1 || fmt == CXBX_VTXFMT_SHORT1N || fmt == CXBX_VTXFMT_PBYTE2 || 
+             fmt == CXBX_VTXFMT_SHORT3 || fmt == CXBX_VTXFMT_SHORT3N)
+    {
+        byteOff &= ~1u;
+    }
+    
     // Category A: float formats (0-3) — just asfloat loads
     [branch] if (fmt <= CXBX_VTXFMT_FLOAT4) {
         switch (fmt) {
